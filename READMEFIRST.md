@@ -150,6 +150,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | Path | What it is / what it is for | Status |
 |---|---|---|
 | `bot/protocol.py` | the only stdout writer; stdout redirect; message parsing; `Request` (exactly one answer, thread-safe) | real |
+| `bot/action_guard.py` | final turn-action choke point: cached grammar validation, warning blacklist, canonical legal-action emission | real |
 | `bot/clock.py` | hard and soft deadlines derived from the message clocks (same proportions as `config.py`) | real |
 | `bot/log.py` | logging to stderr (`BOT_LOG_LEVEL`: debug, info, warning, error) | real |
 | `bot/llm.py` | gateway client (stdlib urllib): `set_key`, `complete` (thinking control, hard timeout, never raises), usage and cost per key, fake mode | real |
@@ -168,6 +169,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `tests/__init__.py` | sets `BOT_FAKE_LLM=1` for all tests | real |
 | `tests/session_script.py` | `BotProc` (bot as child process) and the scripted arena session, reused by `check_image.py` | real |
 | `tests/test_protocol.py` | session, cold start, garbage, warning, null legal actions, watchdog, model failure, closed stdin | real |
+| `tests/test_action_guard.py` | grammar validation, canonical legal actions, warning blacklist, cached grammar, static action-emission check | real |
 | `tests/test_units.py` | memory, ladder, JSON parsing, chat cleanup, defense block, clock proportions | real |
 | `tests/test_kit.py` | kit message shapes (example action from kit rules, specialist found by label, variant settings in the prompt) and five fake-LLM matches on arena-lite that must be CLEAN (skipped without the kit) | real |
 | `tests/test_batch_runner.py` | unit tests for batch runner: CLI argument parsing, replay parsing, metric aggregation, ASCII table formatting | real |

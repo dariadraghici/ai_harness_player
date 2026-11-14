@@ -89,9 +89,9 @@ class ProtocolTests(unittest.TestCase):
             # hard 4 * 13/20 = 2.6 s; model timeout min(1.6, 2.6 - 1) = 1.6 s, so L2 is tried and hangs.
             obj, line, dt = bot.ask(turn_msg(1, seconds=4), 4)
             check_action(obj, line, dt, 3.1, ["1", "2", "3"], p, "turn (hang)")
-            self.assertGreater(dt, 2.0)                  # it really waited for the watchdog
+            self.assertLess(dt, 2.5)                     # the emergency guard skips L2 below four seconds
             self.assertEqual(p, [], bot.stderr_tail())
-            self.assertIn("watchdog answered", bot.stderr_tail(200))
+            self.assertNotIn("watchdog answered", bot.stderr_tail(200))
             time.sleep(0.5)
             self.assertEqual(bot.drain(), [], "a late worker must not send a second line")
         finally:
