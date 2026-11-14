@@ -53,21 +53,33 @@ def find_support(document, answer):
     pattern = r"(?<!\w)" + r"\s+".join(
         re.escape(part) for part in candidate.split()
     ) + r"(?!\w)"
-    match = re.search(pattern, doc, re.I | re.UNICODE)
+    match = re.search(pattern, doc, re.UNICODE)
     return match.group(0) if match else None
 
 
 def _quoted_unknown(rules_text):
     text = str(rules_text or "")
     patterns = (
-        r"\b(?:answer|respond|say|return|use)\s+(?:exactly\s+)?"
-        r"['\"]([^'\"\n]{1,100})['\"]\s+(?:if|when|whenever)\b",
+        r"\b(?:answer|respond|say|return|use|reply)\s+"
+        r"(?:(?:with|using)\s+)?(?:exactly\s+)?(?:[:=]\s*)?"
+        r"['\"]([^'\"\n]{1,100})['\"]",
         r"\bunknown\s+(?:answer|response)\s*(?:is|:)\s*['\"]([^'\"\n]{1,100})['\"]",
     )
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
         if match:
             return match.group(1).strip()
+    plain = re.search(
+        r"\b(?:answer|respond|say|return|use|reply)\s+"
+        r"(?:(?:with|using)\s+)?(?:exactly\s+)?(?:the\s+)?(?:word\s+)?"
+        r"(unknown|not\s+stated|not\s+provided|not\s+given|"
+        r"cannot\s+be\s+determined|can't\s+be\s+determined|"
+        r"i\s+don't\s+know|cannot\s+answer|can't\s+answer)\b",
+        text,
+        re.I,
+    )
+    if plain:
+        return " ".join(plain.group(1).split())
     for quote in re.findall(r"""["'`]([^"'`\n]{1,100})["'`]""", text):
         if _UNKNOWN_WORDS.search(quote):
             return quote.strip()
@@ -119,17 +131,13 @@ def enforce_answer(action, spec, turn_msg):
     rules = spec.rules if spec else ""
     proposed = str(action or "").strip()
 
-    if legal and proposed in legal and find_support(document, proposed):
-        return proposed
-    if not legal and find_support(document, proposed):
-        return proposed
-
-    supported = supported_actions(spec, turn_msg)
-    if supported:
-        for candidate in supported:
-            if candidate.action == proposed:
-                return candidate.action
-        return supported[0].action
+    if legal:
+        if proposed in legal and find_support(document, proposed):
+            return proposed
+    else:
+        quote = find_support(document, proposed)
+        if quote:
+            return quote
     return unknown_action(rules, legal)
 
 

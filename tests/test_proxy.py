@@ -146,9 +146,9 @@ class ProxyBehaviorTests(unittest.TestCase):
             # 1. Verify standard urllib without bypass fails because it tries to use the dead proxy
             req = urllib.request.Request(gateway_url + "/chat/completions")
             standard_opener = urllib.request.build_opener()
-            with self.assertRaises(urllib.error.URLError) as ctx:
+            with self.assertRaises(urllib.error.URLError):
                 standard_opener.open(req, timeout=1.0)
-            self.assertIn("refused", str(ctx.exception).lower())
+            self.assertEqual(MockGatewayHandler.received_requests, [])
 
             # 2. Verify bot.llm.complete bypasses the proxy and reaches the gateway directly
             config.FAKE_LLM = False
@@ -235,8 +235,7 @@ class ProxyBehaviorTests(unittest.TestCase):
             os.environ["HTTPS_PROXY"] = unreachable_proxy
             os.environ["NO_PROXY"] = "otherhost"
 
-            gateway_base = f"http://127.0.0.1:{port}/v1"
-            req = urllib.request.Request(gateway_base.rstrip("/v1") + "/key/info",
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/key/info",
                                          headers={"Authorization": "Bearer test-key"})
             direct_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             with direct_opener.open(req, timeout=2.0) as r:

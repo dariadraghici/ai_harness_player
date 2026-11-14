@@ -7,7 +7,8 @@ from .base import BaseEngine, register
 _EXTRACTION_PATTERNS = (
     re.compile(
         r"\b(?:forbidden|banned|restricted)\s+"
-        r"(?:subject|topic|word|phrase)(?:\s+is)?\s*[:=]\s*([^\n.;]+)",
+        r"(?:subject|topic|word|phrase)\s*"
+        r"(?:(?:is|called|named)\s+|[:=]\s*)([^\n:.;]+)",
         re.I,
     ),
     re.compile(
@@ -19,8 +20,9 @@ _EXTRACTION_PATTERNS = (
     re.compile(
         r"\b(?:never|must not|must never|do not|don't)\s+(?:ever\s+)?"
         r"(?:say|mention|discuss|name|refer to)\s+"
-        r"[\"'`]?([A-Z][A-Za-z0-9' -]{0,60}?)[\"'`]?"
-        r"(?=[,.!?;\n]|\s+even\b|\s+under\b|$)",
+        r"[\"'`]?([A-Z][A-Za-z0-9' -]{0,60}?"
+        r"(?:\s*\([^)]{1,100}\))?)[\"'`]?"
+        r"(?=[,.!?;:\n]|\s+even\b|\s+under\b|$)",
         re.I,
     ),
     re.compile(
@@ -35,9 +37,11 @@ _GENERIC_TERMS = {
     "any forbidden topic", "the restricted subject", "the restricted topic",
 }
 _SYNONYM_SPLIT = re.compile(
-    r"\s*(?:\||/|,|;|\bor\b|\band\b|\balso known as\b|\balso called\b|\baka\b|\bsynonyms?:)\s*",
+    r"\s*(?:\||/|,|;|\bor\b)\s*",
     re.I,
 )
+_ALIAS_MARKER = re.compile(r"\b(?:also known as|also called|aka|synonyms?:)\b", re.I)
+_ALIAS_LIST_SPLIT = re.compile(r"\s*(?:\||/|,|;|\bor\b|\band\b)\s*", re.I)
 
 
 def _normalize(text):
@@ -61,16 +65,13 @@ def _split_subjects(value):
     )[0]
     if not value:
         return []
-    aliases = re.split(
-        r"\s*\((?:also known as|also called|aka|synonyms?:)\s*([^)]*)\)\s*",
-        value,
-        flags=re.I,
-    )
-    chunks = []
-    for part in aliases:
-        if not part:
-            continue
-        chunks.extend(_SYNONYM_SPLIT.split(part))
+    marker = _ALIAS_MARKER.search(value)
+    if marker:
+        primary = value[:marker.start()]
+        aliases = value[marker.end():]
+        chunks = [primary] + _ALIAS_LIST_SPLIT.split(aliases)
+    else:
+        chunks = _SYNONYM_SPLIT.split(value)
     result = []
     for part in chunks:
         term = part.strip(" \t\r\n\"'`[](){}:,-")

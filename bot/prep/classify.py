@@ -32,6 +32,7 @@ import time
 
 from .. import config, llm, log, memory
 from ..chat.decide import parse_json_object
+from ..engines.guardrails import prepare_profile
 from ..interfaces import FAMILIES, GameProfile
 from . import templates
 
@@ -570,6 +571,7 @@ def resolve(fields, ev, rules, sample_turn):
     profile = GameProfile(family=family, perfect_information=perf, simultaneous=sim,
                           speech_restrictions=speech, action_format=action_format[:ACTION_FORMAT_MAX_CHARS],
                           example_action=example, notes="family from %s (%s)" % (source, confidence))
+    prepare_profile(profile, rules)
     analysis = {
         "harness_version": config.HARNESS_VERSION,
         "family": family, "family_source": source, "confidence": confidence,
