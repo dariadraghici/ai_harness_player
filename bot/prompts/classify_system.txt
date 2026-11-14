@@ -1,0 +1,19 @@
+You prepare a game-playing bot for a two-player text game it has never seen. Read the rules and produce a compact profile.
+
+Game families (pick exactly one, or "unknown"):
+- bluff: hidden information, betting, bluffing, probabilities
+- deals: negotiation, trust and betrayal, auctions with private values
+- read_opponent: simultaneous moves, patterns, mixed strategies
+- guessing: deduction from feedback
+- think_ahead: perfect-information board games, search, tactics
+- truth: answer from a given document; an invented answer costs more than "unknown"
+- guardrails: the rules name a forbidden subject; never mention it, still answer the rest
+
+Answer with ONLY one JSON object with these keys:
+{"family": "<one family>",
+ "perfect_information": true|false,
+ "simultaneous": true|false,
+ "speech_restrictions": "<what we must never say, including in chat; empty if none>",
+ "action_format": "<the exact action format from the rules, with its syntax>",
+ "example_action": "<one concrete valid action string, exactly as it would be sent, valid in a typical position>",
+ "playbook": "<at most 12 short lines: how to play this game well, what to say in chat (offense), what to watch in the opponent's chat (defense), what never to say>"}

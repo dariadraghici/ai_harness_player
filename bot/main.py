@@ -1,0 +1,245 @@
+"""Entrypoint: the protocol loop. Tiny and bulletproof.
+
+Shared file (owner: Sebi). Status: real.
+
+Threads:
+  reader  : reads stdin lines into the event queue ("line", text) / ("eof", None)
+  worker  : one per request (prep, start, turn); computes the answer and
+            posts ("done", request) to the same queue
+  main    : the only thread that decides when to answer. It waits on the
+            queue until the request's hard deadline (no CPU spin while idle);
+            at the deadline it answers with the best result so far (watchdog).
+
+Every prep, start and turn gets exactly one answer (protocol.Request has a
+lock and an answered flag). The process exits only on shutdown or closed stdin.
+
+Run: python -u -m bot.main
+"""
+
+from . import protocol
+
+
+def run():
+    protocol.install()          # first: stdout now goes to stderr, protocol keeps fd 1
+
+    import os
+    import queue
+    import signal
+    import sys
+    import threading
+    import time
+
+    from . import clock, config, ladder, llm, log, memory, metrics, opponents, specialist
+    from .chat import decide, defense
+    from .interfaces import VariantSpec
+    from .prep import pipeline
+
+    class Bot:
+        def __init__(self):
+            self.q = queue.Queue()
+            self.pending = None
+            self.prepared = False
+            self.prep_study_seconds = None
+            self.prep_move_seconds = None
+            self.start_msg = None
+            self.spec = None
+            self.move_seconds = None
+
+        # ------------------------------------------------------------ plumbing
+        def reader(self):
+            stdin = sys.stdin.buffer
+            while True:
+                try:
+                    line = stdin.readline()
+                except Exception:
+                    line = b""
+                if not line:
+                    self.q.put(("eof", None))
+                    return
+                self.q.put(("line", line.decode("utf-8", "replace")))
+
+        def spawn(self, req, fn):
+            def work():
+                try:
+                    fn(req)
+                except Exception:
+                    log.exception("worker for %s failed" % req.type)
+                finally:
+                    self.q.put(("done", req))
+            req.t0 = time.monotonic()
+            self.pending = req
+            threading.Thread(target=work, name="worker-" + req.type, daemon=True).start()
+
+        def finish(self, req, by_watchdog):
+            """Answer req with the worker's result, the best so far, or a fallback."""
+            if req is not self.pending:
+                return
+            self.pending = None
+            obj = req.result
+            source = "worker"
+            if obj is None:
+                obj = req.best
+                source = "best-so-far"
+            if obj is None:
+                obj = self.fallback(req)
+                source = "fallback"
+            if by_watchdog:
+                log.warning("watchdog answered %s (%s) after %.2fs" % (
+                    req.type, source, time.monotonic() - req.t0))
+            if req.answer(obj):
+                elapsed = time.monotonic() - req.t0
+                info = getattr(req, "info", {}) or {}
+                metrics.record(req.type, game_id=(self.start_msg or {}).get("game_id")
+                               if req.type != "prep" else req.msg.get("game_id"),
+                               game_index=req.msg.get("game_index"), turn=req.msg.get("turn"),
+                               level=info.get("level"), why=info.get("why"),
+                               elapsed=round(elapsed, 3), watchdog=by_watchdog, source=source,
+                               warning=bool(req.msg.get("warning")), llm=llm.usage())
+
+        def fallback(self, req):
+            if req.type == "prep":
+                return protocol.ready()
+            if req.type == "start":
+                prof = self.spec.profile if self.spec else None
+                return protocol.ready(decide.clean_chat(config.OPENING_FALLBACK, prof))
+            d = ladder.emergency(self.spec, req.msg)
+            req.info = {"level": d.level, "why": d.why}
+            return protocol.action(d.action, d.chat)
+
+        # ------------------------------------------------------------ handlers
+        def on_prep(self, msg):
+            llm.set_key(msg.get("llm"))
+            self.prepared = True
+            self.prep_study_seconds = msg.get("study_seconds")
+            self.prep_move_seconds = msg.get("move_seconds")
+            t0 = time.monotonic()
+            req = protocol.Request(msg, clock.prep_hard(msg, t0))
+
+            def work(r):
+                pipeline.run_prep(msg, r.deadline - 1.0)
+                r.result = protocol.ready()
+            self.spawn(req, work)
+
+        def on_start(self, msg):
+            llm.set_key(msg.get("llm"))           # switch the key first
+            t0 = time.monotonic()
+            self.start_msg = msg
+            self.move_seconds = msg.get("move_seconds") or self.prep_move_seconds
+            variant = msg.get("variant") or {}
+            # A rules-only spec right away, so every later decision has the rules.
+            self.spec = VariantSpec(
+                game_id=str(msg.get("game_id") or "unknown"), game_name=str(msg.get("game_name") or ""),
+                label=variant.get("label", "") if isinstance(variant, dict) else str(variant),
+                rules=msg.get("rules") or "", rules_hash=memory.rules_hash(msg.get("rules") or ""),
+                source="default")
+            req = protocol.Request(msg, clock.start_hard(msg, t0, self.prepared, self.prep_study_seconds))
+            log.info("start %s game %s seat %s vs %s (%s), %.1fs to ready" % (
+                msg.get("game_id"), msg.get("game_index"), msg.get("seat"), msg.get("opponent"),
+                "warm" if self.prepared else "cold", req.deadline - t0))
+
+            def work(r):
+                spec = specialist.for_start(msg, r.deadline - 3.0)
+                if self.start_msg is msg:
+                    self.spec = spec
+                ctx = defense.build_context(msg.get("chat"))
+                left = r.deadline - time.monotonic() - 1.0
+                r.result = protocol.ready(decide.opening_chat(spec, msg, ctx, min(5.0, left)))
+                r.info = {"level": None, "why": "spec source=%s family=%s" % (
+                    spec.source, spec.profile.family)}
+            self.spawn(req, work)
+
+        def on_turn(self, msg):
+            t0 = time.monotonic()
+            req = protocol.Request(msg, clock.turn_hard(msg, t0, self.move_seconds))
+            spec, start_msg = self.spec, self.start_msg
+
+            def progress(d):
+                req.set_best(protocol.action(d.action, d.chat))
+                req.info = {"level": d.level, "why": d.why}
+
+            def work(r):
+                d = ladder.decide_turn(spec, start_msg, msg, r.deadline, progress, self.move_seconds)
+                r.info = {"level": d.level, "why": d.why}
+                r.result = protocol.action(d.action, d.chat)
+            self.spawn(req, work)
+
+        def on_end(self, msg):
+            log.info("end game %s: %s (%s) scores=%s match_score=%s match_over=%s" % (
+                msg.get("game_index"), msg.get("result"), msg.get("reason"), msg.get("scores"),
+                msg.get("match_score"), msg.get("match_over")))
+            sm = self.start_msg or {}
+            opponents.record_game_end(sm.get("opponent"), msg, sm.get("game_id"))
+            metrics.record("end", game_id=sm.get("game_id"), game_index=msg.get("game_index"),
+                           result=msg.get("result"), reason=msg.get("reason"),
+                           match_over=msg.get("match_over"), llm=llm.usage())
+            # match_over does NOT end the container: keep waiting for the next start.
+
+        def shutdown(self, why):
+            log.info("shutting down: %s" % why)
+            try:
+                opponents.save_all()
+                metrics.record("shutdown", why=why, llm=llm.usage("all"))
+            except Exception:
+                log.exception("save on shutdown failed")
+            try:
+                sys.stderr.flush()
+            except Exception:
+                pass
+            os._exit(0)
+
+        # ------------------------------------------------------------ loop
+        def loop(self):
+            threading.Thread(target=self.reader, name="stdin-reader", daemon=True).start()
+            handlers = {"prep": self.on_prep, "start": self.on_start, "turn": self.on_turn,
+                        "end": self.on_end}
+            while True:
+                try:
+                    timeout = None
+                    if self.pending is not None:
+                        timeout = max(0.0, self.pending.deadline - time.monotonic())
+                    try:
+                        kind, data = self.q.get(timeout=timeout)
+                    except queue.Empty:
+                        self.finish(self.pending, by_watchdog=True)
+                        continue
+                    if kind == "done":
+                        self.finish(data, by_watchdog=False)
+                        continue
+                    if kind == "eof":
+                        self.shutdown("stdin closed")
+                    msg = protocol.parse_line(data)
+                    if msg is None:
+                        continue
+                    t = msg["type"]
+                    if t == "shutdown":
+                        self.shutdown("shutdown message")
+                    if self.pending is not None:
+                        if t == "end":
+                            log.warning("end arrived while %s pending; dropping it" % self.pending.type)
+                            self.pending.drop()
+                            self.pending = None
+                        else:
+                            log.warning("%s arrived while %s pending; answering it now" % (
+                                t, self.pending.type))
+                            self.finish(self.pending, by_watchdog=True)
+                    handlers[t](msg)
+                except SystemExit:
+                    raise
+                except Exception:
+                    log.exception("main loop error (continuing)")
+
+    def on_sigterm(signum, frame):
+        log.info("SIGTERM, exiting")
+        os._exit(0)
+
+    try:
+        signal.signal(signal.SIGTERM, on_sigterm)
+    except Exception:
+        pass
+    log.info("luckydevs bot %s starting (fake_llm=%s, memory=%s)" % (
+        config.HARNESS_VERSION, config.FAKE_LLM, memory.root()))
+    Bot().loop()
+
+
+if __name__ == "__main__":
+    run()
