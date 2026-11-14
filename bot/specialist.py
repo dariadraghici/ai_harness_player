@@ -82,7 +82,21 @@ def build_variant(game_id, game_name, label, rules, sample_turn, deadline, think
 
 
 def for_start(start_msg, deadline):
-    """Find or build the specialist for the drawn variant of a start message."""
+    """Find or build the specialist for the drawn variant of a start message.
+
+    The returned spec also carries `seat` (our seat in this game, or None): the engines need it to
+    parse the observation of a turn, and a turn message does not have it. (VariantSpec has no such
+    field; it is a plain attribute of the object, proposed as a field for bot/interfaces.py.)"""
+    spec = _for_start(start_msg, deadline)
+    try:
+        seat = start_msg.get("seat")
+        spec.seat = seat if seat in (0, 1) else None
+    except Exception:
+        pass
+    return spec
+
+
+def _for_start(start_msg, deadline):
     game_id = str(start_msg.get("game_id") or "unknown")
     rules = start_msg.get("rules") or ""
     variant = start_msg.get("variant") or {}

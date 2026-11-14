@@ -212,15 +212,18 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `tests/test_prep.py` | prep unit tests (mocked model): evidence, field checks, repair, playbook cap, alignment, analysis.json; code extraction, static check, generation + manifest + repair, deadlines, phase B, cold path without codegen | real |
 | `tests/test_sandbox.py` | sandbox tests with hand-written fixture simulators: endless loops, memory limit, recursion, SystemExit, print flood, results that cannot travel, child killed from outside, the cap of 2 children, `kill_all`, no key and no stdin in the child, the bot's stdout stays byte-exact | real |
 | `tests/test_verify.py` | verification tests with fixture simulators (one defect each): every check and its failure sentence, simultaneous and chance games, stored turns, differential test, score, winner files, repair loop, rollback, round cap, cache, stale contract, deadline kills the children, prep end to end with play unchanged (L2) | real |
+| `tests/test_engines.py` | engine tests with hand-written fixture simulators (pile, tic-tac-toe, nim, chance game): `BOT_L3`, live check and "off for this game", live counters, looping and slow simulators (slice kept, no child left), solved cache, never loses at tic-tac-toe, nim against the nim-sum, MCTS ranking | real |
 | `bot/prep/codegen.py` | simulator generation: parallel candidates with different briefs, code extraction, static `ast` check (never executes code), files + manifest `candidates/index.json` (harness version and hash of the contract text; another one = no candidates), one repair round, `repair_simulator` (also called by `verify` with the failures of its checks) | real |
 | `bot/prep/verify.py` | verification, parent side: `verify_simulator` (one candidate through the job in a sandbox child -> `VerifyReport`), `compare` (differential test between candidates), `verify_variant` (verify all, repair rounds with rollback of a worse repair, fresh candidates when all fail, winner -> `simulator.py` + `verify.json`, `spec.verified`), `is_done`, `turn_samples` (prep sample + stored real turns), `check_turn` (one real turn against a simulator, for the live check) | real |
 | `bot/prep/sandbox.py` | the only place where generated code runs: `Worker` (lazy, reusable, restarts after a kill), single calls (`call_simulator`) and jobs (`Worker.job`, `run_job`: one of our files runs next to the simulator), timeouts, at most 2 children, `kill_all`, `SandboxError` | real |
 | `bot/prep/verify_job.py` | the verification suite as a sandbox job (runs inside the child, standalone, never imported by the bot): load, sample parse, legal actions, contract behavior (no mutation, same result twice, JSON round trip), seeded random self-play with playouts per second, seed check (contract C11), stored real turns, traces for the differential test; mode `turn` for one turn | real |
 | `bot/prep/sandbox_child.py` | the program inside the child (`python -I -S`, standalone, never imported by the bot): limits itself (memory, CPU, files), hides stdout and stdin from generated code, serves load / call / job requests as JSON lines | real |
-| `bot/specialist.py` | per-variant registry: process -> memory -> same variant label (`lookup_by_label`) -> cold prep; `build_variant` (extension point) | real |
+| `bot/specialist.py` | per-variant registry: process -> memory -> same variant label (`lookup_by_label`) -> cold prep; `build_variant` (extension point); `for_start` also records our seat on the spec (`spec.seat`) for the engines | real |
 | `bot/engines/__init__.py` | package marker | real |
-| `bot/engines/base.py` | `BaseEngine`, `NotAvailable`, registry family -> engine | real |
-| `bot/engines/search.py` | Think ahead: alpha-beta / MCTS | stub |
+| `bot/engines/base.py` | `BaseEngine`, `NotAvailable`, registry family -> engine; `SimEngine`, the helper of every engine that runs on a verified simulator: switch `BOT_L3`, simulator file check, time slice (15 percent of the move clock), one fresh sandbox child per turn, live check result, "off for this game", per-variant live counters (`live.json`), `Candidate` building | real |
+| `bot/engines/search.py` | Think ahead, parent side: payload, cache of solved roots in `<variant_dir>/solved.json`, candidates (exact values when solved) | real |
+| `bot/engines/search_job.py` | Think ahead search as a sandbox job: iterative deepening alpha-beta with transposition table (exact leaves), MCTS (open loop, one possible world per playout) for chance, hidden values, one-player modules and large branching, alpha-beta then MCTS when the game is not solved | real |
+| `bot/engines/sim_common.py` | helpers the engine jobs load by path (seat resolution and live check, canonical state text, hidden paths, world sampling by seeds, `Clock`) | real |
 | `bot/engines/guess.py` | Guessing: hypothesis filtering | stub |
 | `bot/engines/simultaneous.py` | Read the opponent: mixed strategy + opponent model | stub |
 | `bot/engines/bluff.py` | Bluff: Monte Carlo over hidden states | stub |
@@ -237,6 +240,8 @@ during the event; falls back to a temp folder when not writable):
 <memory>/<game_id>/<rules_hash>/sample_turn.json  sample turn from prep (test case for simulators)
 <memory>/<game_id>/<rules_hash>/simulator.py      the verified winner (only when verification passed)
 <memory>/<game_id>/<rules_hash>/verify.json       verification report: every candidate, checks, failures, winner, playouts per second
+<memory>/<game_id>/<rules_hash>/solved.json      Think ahead: solved root positions (tied to the simulator hash)
+<memory>/<game_id>/<rules_hash>/live.json        games in which the live check of the engines passed / failed (a variant that keeps failing is switched off)
 <memory>/opponents/<team_id>.json                 opponent profiles
 <memory>/metrics/<container_id>.jsonl             one line per answer / game end
 ```
