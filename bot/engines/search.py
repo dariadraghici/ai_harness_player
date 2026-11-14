@@ -98,7 +98,9 @@ class SearchEngine(base.SimEngine):
         out = []
         for a in acts[:MAX_CANDIDATES]:
             v = max(-1.0, min(1.0, float(a["value"])))
-            if algo in ("mcts", "alphabeta+mcts"):
+            if algo == "tactical":
+                note = "tactical: %s" % a.get("tactical", "priority safeguard")
+            elif algo in ("mcts", "alphabeta+mcts"):
                 if not a.get("visits"):
                     note = ("alpha-beta: lost within %d plies" % res.get("depth", 0)) if a.get("lost_in") \
                         else "not visited by the search"
