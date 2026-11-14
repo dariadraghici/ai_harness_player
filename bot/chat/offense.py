@@ -1,38 +1,84 @@
-"""Chat tactics per family.
-
-Owner: luckydevs-2. Status: stub.
-
-Done means: per family, guidance for the decision prompt (tactics()) that
-makes our chat line serve the move: bluffs consistent with the move in Bluff,
-offers and pressure in Deals, misleading pattern talk in Read the opponent,
-calm confidence elsewhere; plus fallback_line() when the model is not
-available. Always respectful: no insults, hate, harassment, real people.
-"""
+"""Respectful chat tactics that support a move without explaining our plan."""
 
 _TACTICS = {
-    "bluff": "Project confidence that fits a strong hand when betting, doubt when checking; never state your real private cards.",
-    "deals": "Anchor high, concede slowly, praise cooperation, never reveal your private value or reservation price.",
-    "read_opponent": "Talk about a pattern you are NOT going to follow; sound predictable while staying unpredictable.",
-    "guessing": "Keep it short and friendly; never reveal your secret or how close the opponent is.",
-    "think_ahead": "Sound calm and confident; hint at threats; never explain your real plan.",
-    "truth": "Be precise and factual; never claim facts that are not in the document.",
-    "guardrails": "Keep chat short and on the game; never touch the forbidden subject in any form.",
+    "bluff": (
+        "Project confidence or doubt that fits your move, but do not reveal or "
+        "describe private information, the move's rationale, or your next plan."
+    ),
+    "deals": (
+        "Use respectful leverage: emphasize mutual value, patience, or the cost "
+        "of a poor deal. Do not reveal your private value or reservation point."
+    ),
+    "read_opponent": (
+        "Use light pattern talk to influence the opponent, but do not disclose "
+        "your actual strategy or explain the move you selected."
+    ),
+    "guessing": (
+        "Stay friendly and give away no secret, feedback interpretation, or "
+        "next guess. Do not state how close either player is."
+    ),
+    "think_ahead": (
+        "Sound calm and confident without narrating the move, threat, or plan "
+        "you selected."
+    ),
+    "truth": (
+        "Stay measured. Never assert a fact unless it is directly supported by "
+        "the supplied document; do not reveal private information."
+    ),
+    "guardrails": (
+        "Keep chat brief and focused on the game. Never use the forbidden "
+        "subject or a synonym, even to quote or deny it."
+    ),
 }
 
-_FALLBACK = {
-    "bluff": "I like my chances this round.",
-    "deals": "I am open to a fair deal that works for both of us.",
-    "read_opponent": "I think I have figured out your pattern.",
-    "think_ahead": "Interesting position. I see a plan here.",
+_FALLBACKS = {
+    "bluff": (
+        "I am comfortable with where this is going.",
+        "There is more to this position than meets the eye.",
+    ),
+    "deals": (
+        "There is room to make this worthwhile for both of us.",
+        "A little patience can help us find better terms.",
+    ),
+    "read_opponent": (
+        "Patterns can be misleading; I am watching closely.",
+        "I wonder whether this round will follow the usual pattern.",
+    ),
+    "guessing": (
+        "Your next move may tell us more than you think.",
+        "This is an interesting puzzle; let's see what you reveal.",
+    ),
+    "think_ahead": (
+        "This position still has plenty of possibilities.",
+        "I am enjoying the challenge so far.",
+    ),
+    "truth": (
+        "I will stick to what the evidence supports.",
+        "Let's see what the document actually tells us.",
+    ),
+    "guardrails": (
+        "Let's keep this focused on the game.",
+        "Good luck; I am ready to continue.",
+    ),
 }
+
+_DEFAULT = (
+    "Good game so far. Let us see how this plays out.",
+    "Good luck; I am ready to continue.",
+)
 
 
 def tactics(family):
-    """One line of chat tactics for the decision prompt."""
-    return _TACTICS.get(family, "Keep chat short, friendly, and in service of your move.")
+    """Return compact family-specific chat guidance for the decision prompt."""
+    return _TACTICS.get(family, "Keep chat brief, respectful, and in service of your move.")
 
 
 def fallback_line(family, turn_msg=None):
-    """A short line when the model is not available. Must be safe in any game."""
-    # TODO(luckydevs-2): vary lines; keep them guardrails-safe (generic words only).
-    return _FALLBACK.get(family, "Good game so far. Let us see how this plays out.")
+    """Return a short line that does not disclose a move or private state."""
+    lines = _FALLBACKS.get(family, _DEFAULT)
+    turn = (turn_msg or {}).get("turn")
+    try:
+        index = int(turn or 0) % len(lines)
+    except (TypeError, ValueError):
+        index = 0
+    return lines[index]
