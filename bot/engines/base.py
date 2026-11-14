@@ -40,7 +40,10 @@ from ..interfaces import Candidate, Engine, VariantSpec  # noqa: F401  (re-expor
 SLICE_FRACTION = 0.15            # of the move clock: 3 s of 20
 SLICE_MIN_S = 0.4                # below this the engine does not start
 SLICE_BACKSTOP_S = 1.5           # the parent kills the child this long after the slice
-L3_DEFAULT = "think_ahead"       # families on by default when BOT_L3 is not set (decided by measurement)
+# Families on by default when BOT_L3 is not set. Decided by measurement (see the hand-over): think_ahead and
+# read_opponent ran in real practice matches on their games (tic_tac_toe, nim_deal, pig; rps_twist), guessing is
+# measured on the real guess_number simulators; bluff has no practice game, so it is off until it has one.
+L3_DEFAULT = "think_ahead,guessing,read_opponent"
 L3_ALL = ("think_ahead", "guessing", "read_opponent", "bluff")
 JOB_ERRORS_OFF = 2               # simulator exceptions in jobs before "off for this game"
 
