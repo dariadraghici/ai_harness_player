@@ -18,7 +18,7 @@ run(sim, payload) with payload["mode"]:
       example_action the profile's example action, or ""
       games, step_cap, budget_s, trace_games, trace_steps
     Result: {"checks": {name: bool}, "failures": [sentence], "warnings": [sentence],
-             "exact_order", "legal_complete", "legal_count", "games", "steps_per_game",
+             "exact_order", "both_seats", "legal_complete", "legal_count", "games", "steps_per_game",
              "playouts_per_s", "views": [...], "traces": [...], "seconds"}
 
   "turn"   one turn message against the simulator (the live consistency check):
@@ -81,6 +81,7 @@ class Suite:
         self.t0 = time.perf_counter()
         self.budget = float(payload.get("budget_s") or 10.0)
         self.seeded = bool(payload.get("seeded"))
+        self.seen_cp = set()
 
     # ------------------------------------------------------------ bookkeeping
     def fail(self, check, sentence):
@@ -272,6 +273,8 @@ class Suite:
             if not isinstance(la, list) or not all(isinstance(a, str) for a in la):
                 return False, steps, None, "legal_actions returned %s after the actions %s" % (short(la), short(hist[-8:]))
             cp = None if term else self.sim.current_player(st)
+            if cp in (0, 1, -1):
+                self.seen_cp.add(cp)
             if record is not None:
                 record.append({"cp": cp, "legal": digest(la), "terminal": term})
             if term:
@@ -356,6 +359,11 @@ class Suite:
                 done, self.budget))
         self.ok(check)
         if self.checks.get(check):
+            if self.p.get("simultaneous") is False and done and not {0, 1} <= self.seen_cp:
+                self.both_seats = False
+                self.warnings.append("in %d random games only seat %s ever had the move: the other player's "
+                                     "decisions are not modelled as moves (current_player never switches)" % (
+                                         done, sorted(self.seen_cp)))
             self.speed(state, cap)
 
     def speed(self, state, cap):
@@ -429,6 +437,7 @@ class Suite:
     # ------------------------------------------------------------ the whole suite
     def run(self):
         self.exact_order = False
+        self.both_seats = True
         self.games = 0
         self.steps_per_game = 0.0
         self.playouts_per_s = 0.0
@@ -470,7 +479,7 @@ class Suite:
             self.checks.setdefault("seed", False)
         complete = getattr(self.sim, "LEGAL_ACTIONS_COMPLETE", None) if self.sim is not None else None
         return {"checks": self.checks, "failures": self.failures, "warnings": self.warnings[:6],
-                "exact_order": bool(self.exact_order), "legal_complete": complete if isinstance(complete, bool) else None,
+                "exact_order": bool(self.exact_order), "both_seats": bool(self.both_seats), "legal_complete": complete if isinstance(complete, bool) else None,
                 "legal_count": legal_count, "games": self.games, "steps_per_game": self.steps_per_game,
                 "playouts_per_s": self.playouts_per_s, "views": views, "traces": traces,
                 "samples": len(samples), "seconds": round(time.perf_counter() - self.t0, 3)}

@@ -152,7 +152,7 @@ class Worker:
             kwargs["start_new_session"] = True
         try:
             self.proc = subprocess.Popen(
-                [sys.executable, "-I", "-S", CHILD_FILE, str(self.mem_mb), str(self.cpu_s)],
+                [sys.executable, "-I", "-S", "-B", CHILD_FILE, str(self.mem_mb), str(self.cpu_s)],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env=env, close_fds=True, **kwargs)
         except Exception as e:

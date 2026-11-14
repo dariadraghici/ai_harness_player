@@ -87,7 +87,8 @@ stdin line -> main.py (reader thread -> event queue -> main loop)
                     -> specialist.lookup (process, then /memory)
                     -> else specialist.build_variant -> prep/classify (1 model call,
                        thinking on) -> memory.save_variant
-                  [luckydevs-3: prep/codegen -> prep/sandbox -> prep/verify]
+                  per variant that wants a simulator: prep/codegen (candidates) -> prep/verify
+                    (checks in prep/sandbox children, repair, winner -> simulator.py, spec.verified)
                 -> {"type":"ready"}   (at clock.prep_hard at the latest)
 
    start -----> llm.set_key -> specialist.for_start
@@ -191,7 +192,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | Path | What it is / what it is for | Status |
 |---|---|---|
 | `bot/prep/__init__.py` | package marker | real |
-| `bot/prep/pipeline.py` | prep under the time budget: phase A (classify variants in parallel, cache lookup), family alignment across variants; phase B (simulator candidates for the variants worth it, done at about 45 percent of the prep clock); extension point for verification | real |
+| `bot/prep/pipeline.py` | prep under the time budget: phase A (classify variants in parallel, cache lookup), family alignment across variants; then one chain per variant that wants a simulator, in parallel: candidates (`codegen`, until 53% of the budget) -> verification and repair rounds (`verify`, until 85%), sandbox children killed at that deadline; cached winners are not redone | real |
 | `bot/prep/classify.py` | profile: code evidence (family signals, format sentences, quoted examples, sample facts) + one model call + field checks + at most one repair call; `analysis.json`; `align_families`; `call_model` (deadline-checked, capped prep model calls) | real |
 | `bot/prep/templates.py` | loader of the prep prompt templates in `bot/prep/prompts/` | real |
 | `bot/prep/prompts/classify_system.txt` | system prompt of the classify call (fields and what each is used for) | real |
@@ -205,10 +206,11 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/prep/prompts/codegen_briefs.txt` | the working briefs that make parallel candidates differ (minimal, parser-first, numbered-checks) | real |
 | `tests/test_prep.py` | prep unit tests (mocked model): evidence, field checks, repair, playbook cap, alignment, analysis.json; code extraction, static check, generation + manifest + repair, deadlines, phase B, cold path without codegen | real |
 | `tests/test_sandbox.py` | sandbox tests with hand-written fixture simulators: endless loops, memory limit, recursion, SystemExit, print flood, results that cannot travel, child killed from outside, the cap of 2 children, `kill_all`, no key and no stdin in the child, the bot's stdout stays byte-exact | real |
-| `bot/prep/codegen.py` | simulator generation: parallel candidates with different briefs, code extraction, static `ast` check (never executes code), files + manifest `candidates/index.json`, one repair round, `repair_simulator` | real |
-| `bot/prep/verify.py` | simulator tests against sample turns, `VerifyReport` | stub |
+| `tests/test_verify.py` | verification tests with fixture simulators (one defect each): every check and its failure sentence, simultaneous and chance games, stored turns, differential test, score, winner files, repair loop, rollback, round cap, cache, stale contract, deadline kills the children, prep end to end with play unchanged (L2) | real |
+| `bot/prep/codegen.py` | simulator generation: parallel candidates with different briefs, code extraction, static `ast` check (never executes code), files + manifest `candidates/index.json` (harness version and hash of the contract text; another one = no candidates), one repair round, `repair_simulator` (also called by `verify` with the failures of its checks) | real |
+| `bot/prep/verify.py` | verification, parent side: `verify_simulator` (one candidate through the job in a sandbox child -> `VerifyReport`), `compare` (differential test between candidates), `verify_variant` (verify all, repair rounds with rollback of a worse repair, fresh candidates when all fail, winner -> `simulator.py` + `verify.json`, `spec.verified`), `is_done`, `turn_samples` (prep sample + stored real turns), `check_turn` (one real turn against a simulator, for the live check) | real |
 | `bot/prep/sandbox.py` | the only place where generated code runs: `Worker` (lazy, reusable, restarts after a kill), single calls (`call_simulator`) and jobs (`Worker.job`, `run_job`: one of our files runs next to the simulator), timeouts, at most 2 children, `kill_all`, `SandboxError` | real |
-| `bot/prep/verify_job.py` | the verification suite as a sandbox job (runs inside the child, standalone): load, sample parse, legal actions, contract behavior, seeded self-play with playouts per second, seed check (C11), traces for the differential test, one-turn check. NOT wired yet: `bot/prep/verify.py` (the parent side) is still a stub | basic |
+| `bot/prep/verify_job.py` | the verification suite as a sandbox job (runs inside the child, standalone, never imported by the bot): load, sample parse, legal actions, contract behavior (no mutation, same result twice, JSON round trip), seeded random self-play with playouts per second, seed check (contract C11), stored real turns, traces for the differential test; mode `turn` for one turn | real |
 | `bot/prep/sandbox_child.py` | the program inside the child (`python -I -S`, standalone, never imported by the bot): limits itself (memory, CPU, files), hides stdout and stdin from generated code, serves load / call / job requests as JSON lines | real |
 | `bot/specialist.py` | per-variant registry: process -> memory -> same variant label (`lookup_by_label`) -> cold prep; `build_variant` (extension point) | real |
 | `bot/engines/__init__.py` | package marker | real |
@@ -228,8 +230,8 @@ during the event; falls back to a temp folder when not writable):
 <memory>/<game_id>/<rules_hash>/profile.json      GameProfile
 <memory>/<game_id>/<rules_hash>/playbook.md       playbook from prep
 <memory>/<game_id>/<rules_hash>/sample_turn.json  sample turn from prep (test case for simulators)
-<memory>/<game_id>/<rules_hash>/simulator.py      later (luckydevs-3)
-<memory>/<game_id>/<rules_hash>/verify.json       later (luckydevs-3)
+<memory>/<game_id>/<rules_hash>/simulator.py      the verified winner (only when verification passed)
+<memory>/<game_id>/<rules_hash>/verify.json       verification report: every candidate, checks, failures, winner, playouts per second
 <memory>/opponents/<team_id>.json                 opponent profiles
 <memory>/metrics/<container_id>.jsonl             one line per answer / game end
 ```

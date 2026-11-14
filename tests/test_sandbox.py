@@ -178,6 +178,17 @@ class SandboxTests(unittest.TestCase):
         self.assertFalse(w.alive())
         self.assertEqual(sandbox.live_count(), 0)
 
+    def test_rewritten_file_is_never_served_from_a_cache(self):
+        # Same path, same size, same second: a bytecode cache would serve the old module.
+        path = self.sim()
+        self.assertEqual(sandbox.call_simulator(path, "parse_observation", [OBS, {}, 0], 5)["stones"], 7)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(GOOD.replace('"stones": stones,', '"stones": 99999,'))
+        st = os.stat(path)
+        os.utime(path, (st.st_atime, int(st.st_mtime)))
+        self.assertEqual(sandbox.call_simulator(path, "parse_observation", [OBS, {}, 0], 5)["stones"], 99999)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "__pycache__")))
+
     def test_one_shot_call_and_missing_file(self):
         self.assertEqual(sandbox.call_simulator(self.sim(), "parse_observation", [OBS, {}, 1], 5)["me"], 1)
         with self.assertRaises(sandbox.SandboxError):

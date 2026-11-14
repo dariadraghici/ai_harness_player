@@ -4,7 +4,7 @@ Owner: luckydevs-3. Status: real.
 
 Started by bot/prep/sandbox.py as
 
-    python -I -S <this file> <memory limit MB> <cpu limit s>
+    python -I -S -B <this file> <memory limit MB> <cpu limit s>
 
 It is OUR code and trusted, but it lives next to generated simulator code, so
 it is standalone: standard library only, nothing from `bot`. Protocol with the
@@ -35,11 +35,11 @@ Before any generated code is loaded this program
 It exits when its stdin closes.
 """
 
-import importlib.util
 import json
 import os
 import sys
 import traceback
+import types
 
 MAX_ANSWER_BYTES = 8 * 1024 * 1024      # an answer longer than this becomes an error answer
 SIM_FUNCTIONS = ("parse_observation", "legal_actions", "apply_action", "is_terminal", "returns",
@@ -75,11 +75,14 @@ def set_limits(mem_mb, cpu_s):
 
 
 def load_file(path, name):
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError("cannot load %s" % path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    """Run the file's CURRENT source as a module. No bytecode cache on purpose: a candidate is
+    rewritten in place by a repair, and a cached .pyc is matched by mtime in seconds and size
+    only, so a stale one could be loaded for a new file."""
+    with open(path, "r", encoding="utf-8") as f:
+        source = f.read()
+    module = types.ModuleType(name)
+    module.__file__ = path
+    exec(compile(source, path, "exec"), module.__dict__)
     return module
 
 
