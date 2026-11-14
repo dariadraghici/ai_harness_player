@@ -1,21 +1,53 @@
-"""Guessing: hypothesis filtering.
+"""Guessing: hypothesis filtering and best-split choice.
 
-Owner: luckydevs-3. Status: stub.
+Owner: luckydevs-3. Status: real.
 
-Done means: keep the set of answers still consistent with all feedback so far; rank guesses by how well they split that set (expected remaining size or entropy).
+For deduction-from-feedback games. The work is the sandbox job
+bot/engines/guess_job.py (see its docstring for the method); this file is the
+parent side: the payload and the candidates.
+
+  * hypotheses: the hidden values the simulator can draw "consistent with all
+    feedback so far" (contract C11), sampled by seeds from the state parsed from
+    THIS turn's observation. A small set is complete, a large one a sample;
+  * every candidate action is applied in every hypothesis and the hypotheses are
+    grouped by what our view then shows (the feedback); the best split leaves the
+    fewest hypotheses (expected log2), an action that names a possible answer gets
+    credit for the chance that it is right;
+  * long action lists (guess a number from 1 to 1000): a spread sample of the list,
+    the actions that are hypotheses, then the neighbors of the best ones.
+
+Candidate values are RELATIVE to the best split: the best is 1.0 and every 0.1 bit
+of expected information lost costs 0.05, so the ladder's margin keeps the actions
+that are practically as good and the model may choose among them. The note carries
+the numbers (hypotheses, exact or sample, expected hypotheses left, probability of
+being right).
 """
 
-from .base import BaseEngine, register
+import os
+
+from ..interfaces import Candidate
+from . import base
+
+JOB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guess_job.py")
 
 
-class GuessEngine(BaseEngine):
+class GuessEngine(base.SimEngine):
     family = "guessing"
+    job_file = JOB_FILE
 
-    def candidates(self, specialist, turn_msg, deadline):
-        # TODO(luckydevs-3): implement. Must return list[Candidate] sorted best first,
-        # use only specialist.simulator_path through prep/sandbox.py (killable
-        # child process) and stop before deadline (time.monotonic()).
-        raise NotImplementedError("guessing engine not implemented yet")
+    def build(self, res, spec, turn_msg, game):
+        out = []
+        n = res.get("hypotheses", 0)
+        for a in res.get("actions") or []:
+            if res.get("algo") == "single":
+                note = "only legal move"
+            else:
+                note = "best split of %d %s hypotheses: %.1f left on average in %d feedback classes, " \
+                       "P(right) %.3f, scored %d of %d actions" % (
+                           n, "exact" if res.get("exact") else "sampled", a.get("expected_left", 0.0),
+                           a.get("classes", 0), a.get("p_hit", 0.0), res.get("scored", 0), res.get("of", 0))
+            out.append(Candidate(a["action"], max(-1.0, min(1.0, float(a["value"]))), note))
+        return out
 
 
-register(GuessEngine())
+base.register(GuessEngine())

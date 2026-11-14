@@ -223,8 +223,9 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/engines/base.py` | `BaseEngine`, `NotAvailable`, registry family -> engine; `SimEngine`, the helper of every engine that runs on a verified simulator: switch `BOT_L3`, simulator file check, time slice (15 percent of the move clock), one fresh sandbox child per turn, live check result, "off for this game", per-variant live counters (`live.json`), `Candidate` building | real |
 | `bot/engines/search.py` | Think ahead, parent side: payload, cache of solved roots in `<variant_dir>/solved.json`, candidates (exact values when solved) | real |
 | `bot/engines/search_job.py` | Think ahead search as a sandbox job: iterative deepening alpha-beta with transposition table (exact leaves), MCTS (open loop, one possible world per playout) for chance, hidden values, one-player modules and large branching, alpha-beta then MCTS when the game is not solved | real |
-| `bot/engines/sim_common.py` | helpers the engine jobs load by path (seat resolution and live check, canonical state text, hidden paths, world sampling by seeds, `Clock`) | real |
-| `bot/engines/guess.py` | Guessing: hypothesis filtering | stub |
+| `bot/engines/sim_common.py` | helpers the engine jobs load by path (seat resolution and live check, canonical state text, hidden paths, world sampling by seeds, worlds written back into a state, view of a state without hidden parts, `Clock`) | real |
+| `bot/engines/guess.py` | Guessing, parent side: payload and candidates (relative values: the best split is 1.0, every 0.1 bit lost costs 0.05) | real |
+| `bot/engines/guess_job.py` | Guessing as a sandbox job: hypotheses = hidden values the simulator can draw consistent with the feedback (sampled by seeds, exact when small), every candidate action applied in every hypothesis, partition by what our view shows, expected information, credit for naming a possible answer, spread sample + neighbors on long action lists | real |
 | `bot/engines/simultaneous.py` | Read the opponent: mixed strategy + opponent model | stub |
 | `bot/engines/bluff.py` | Bluff: Monte Carlo over hidden states | stub |
 

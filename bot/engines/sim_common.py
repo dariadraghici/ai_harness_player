@@ -22,8 +22,10 @@ Standalone: standard library only. What it gives a job:
   Clock(budget_s)       a time budget the job keeps by itself
 """
 
+import copy
 import json
 import random
+import re
 import time
 
 SEED_MAX = 2 ** 31
@@ -258,3 +260,76 @@ def sample_worlds(g, state, legal, clock, max_worlds, max_seeds, rng):
         if len(worlds) > 0 and quiet >= max(60, 3 * len(worlds)):
             return worlds, paths, True
     return worlds, paths, False
+
+
+# ---------------------------------------------------------------- worlds as values of the hidden paths
+TOKEN = re.compile(r"[A-Za-z0-9_.\-]+")
+
+
+def set_path(state, path, value):
+    cur = state
+    for p in path[:-1]:
+        cur = cur[p]
+    cur[path[-1]] = copy.deepcopy(value)
+
+
+def scalars(value, out=None):
+    out = [] if out is None else out
+    if isinstance(value, dict):
+        for k in sorted(value, key=str):
+            scalars(value[k], out)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            scalars(v, out)
+    elif value is not None and not isinstance(value, bool):
+        out.append(str(value))
+    return out
+
+
+def names_value(action, tokens_of_world):
+    """Does the action text contain every scalar of the hidden value as a whole token?"""
+    if not tokens_of_world:
+        return False
+    have = TOKEN.findall(action)
+    pool = list(have)
+    for t in tokens_of_world:
+        if t in pool:
+            pool.remove(t)
+        else:
+            return False
+    return True
+
+
+def view_key(g, ns, paths):
+    """What our view shows of the state ns: without the hidden parts and the seed."""
+    s = copy.deepcopy(ns) if isinstance(ns, dict) else ns
+    if isinstance(s, dict):
+        s.pop("seed", None)
+        for p in paths:
+            try:
+                set_path(s, p, None)
+            except (KeyError, IndexError, TypeError):
+                pass
+    return dump(s)
+
+
+def sample_hypotheses(g, state, la, clock, rng, max_worlds=2000, max_seeds=40000):
+    """Returns (hyps, paths, exact): hyps is a list of value lists, one per world, at the hidden paths."""
+    worlds, paths, exact = sample_worlds(g, state, la, clock, max_worlds, max_seeds, rng)
+    hyps = []
+    for _, after in worlds:
+        vals = []
+        for p in paths:
+            try:
+                vals.append(get_path(after, p))
+            except (KeyError, IndexError, TypeError):
+                vals.append(None)
+        hyps.append(vals)
+    return hyps, paths, exact
+
+
+def world_state(state, paths, vals):
+    s = copy.deepcopy(state)
+    for p, v in zip(paths, vals):
+        set_path(s, p, v)
+    return s

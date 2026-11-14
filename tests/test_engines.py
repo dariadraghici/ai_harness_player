@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 from bot import memory, specialist
-from bot.engines import base, search
+from bot.engines import base, guess, search
 from bot.interfaces import GameProfile, VariantSpec
 from bot.prep import codegen, sandbox, verify
 from tests.test_sandbox import GOOD as PILE
@@ -115,6 +115,69 @@ def current_player(state):
     return state["mover"]
 '''
 
+
+# Guess the secret number: hidden value, higher/lower feedback, drawn consistent with the feedback (C11).
+GUESS = '''"""Guess the number (single player): the secret is hidden and drawn consistently."""
+import copy
+import random
+import re
+
+LEGAL_ACTIONS_COMPLETE = True
+LOW, HIGH, CAP = 1, 64, 20
+
+
+def parse_observation(observation, variant, seat):
+    low = int(re.search(r"from (\\d+) to (\\d+)", observation).group(1))
+    high = int(re.search(r"from (\\d+) to (\\d+)", observation).group(2))
+    hist = [[int(a), b] for a, b in re.findall(r"guess (\\d+) -> (higher|lower|correct)", observation)]
+    return {"me": 0, "low": low, "high": high, "hist": hist, "secret": None, "seed": 0}
+
+
+def bounds(state):
+    lo, hi = state["low"], state["high"]
+    for g, fb in state["hist"]:
+        if fb == "higher":
+            lo = max(lo, g + 1)
+        elif fb == "lower":
+            hi = min(hi, g - 1)
+        else:
+            lo = hi = g
+    return lo, hi
+
+
+def is_terminal(state):
+    return bool(state["hist"]) and (state["hist"][-1][1] == "correct" or len(state["hist"]) >= CAP)
+
+
+def legal_actions(state):
+    return [] if is_terminal(state) else ["guess %d" % n for n in range(state["low"], state["high"] + 1)]
+
+
+def apply_action(state, action):
+    m = re.fullmatch(r"guess (\\d+)", action)
+    if not m or is_terminal(state) or not state["low"] <= int(m.group(1)) <= state["high"]:
+        raise ValueError("illegal")
+    s = copy.deepcopy(state)
+    if s["secret"] is None:
+        lo, hi = bounds(s)
+        rng = random.Random(s["seed"])
+        s["secret"] = rng.randint(lo, hi)
+        s["seed"] = rng.randrange(2 ** 31)
+    n = int(m.group(1))
+    s["hist"].append([n, "correct" if n == s["secret"] else "higher" if s["secret"] > n else "lower"])
+    return s
+
+
+def returns(state):
+    won = bool(state["hist"]) and state["hist"][-1][1] == "correct"
+    return [1.0 - 0.05 * len(state["hist"]), 0.0] if won else [-1.0, 1.0]
+
+
+def current_player(state):
+    return 0
+'''
+GUESS = GUESS  # noqa
+
 # A one-step chance game: "sure" pays 0.2, "gamble" pays +1 or -1 by a die from the seed.
 GAMBLE = '''"""Sure thing or gamble."""
 import copy
@@ -171,6 +234,11 @@ def ttt_obs(board, seat):
 
 def nim_obs(heaps, seat, mover):
     return "NIM. You are seat %d. Heaps: %s . Mover: %d" % (seat, " ".join(str(h) for h in heaps), mover)
+
+
+def guess_obs(low, high, hist):
+    lines = "".join("  guess %d -> %s\n" % (g, fb) for g, fb in hist)
+    return "GUESS. You are seat 0. Find the secret number from %d to %d.\nYour guesses:\n%s" % (low, high, lines)
 
 
 def sha(code):
@@ -501,6 +569,107 @@ class SearchTests(Base):
         with mock.patch.object(ladder.decide_mod, "decide", return_value=None):
             d = ladder.decide_turn(spec, {"seat": 0}, msg, time.monotonic() + 12.0)
         self.assertEqual((d.action, d.level), ("take 3", 3))
+
+
+class GuessTests(Base):
+
+    def play(self, eng, spec, low, high, secret, limit=14):
+        hist, game = [], secret * 1000 + low
+        for n in range(limit):
+            c = self.ask(eng, spec, self.turn(guess_obs(low, high, hist), None, game_index=game, turn=n + 1))
+            self.assertTrue(c, "no candidates at guess %d" % n)
+            g = int(c[0].action.split()[1])
+            hist.append((g, "correct" if g == secret else "higher" if secret > g else "lower"))
+            if g == secret:
+                return hist
+        return hist
+
+    def test_first_guesses_halve_the_range_and_the_number_is_found_in_about_log2_n(self):
+        spec = self.install(GUESS, family="guessing", unknown=True, both=False, perfect=False)
+        eng = self.engine(guess.GuessEngine)
+        c = self.ask(eng, spec, self.turn(guess_obs(1, 64, []), None))
+        first = int(c[0].action.split()[1])
+        self.assertTrue(28 <= first <= 37, first)                       # the middle of 1..64
+        self.assertEqual(c[0].value, 1.0)
+        self.assertIn("exact", c[0].note)
+        used = []
+        for secret in (1, 23, 64):
+            h = self.play(eng, spec, 1, 64, secret)
+            self.assertEqual(h[-1][1], "correct", (secret, h))
+            used.append(len(h))
+        self.assertTrue(all(u <= 7 for u in used), used)               # log2(64) = 6, plus the last guess
+
+    def test_long_list_is_sampled_and_still_splits_in_the_middle(self):
+        big = GUESS.replace("LOW, HIGH, CAP = 1, 64, 20", "LOW, HIGH, CAP = 1, 5000, 20")
+        spec = self.install(big, family="guessing", unknown=True, both=False, perfect=False)
+        eng = self.engine(guess.GuessEngine)
+        c = self.ask(eng, spec, self.turn(guess_obs(1, 5000, []), None))
+        first = int(c[0].action.split()[1])
+        self.assertTrue(2000 <= first <= 3000, first)
+        self.assertIn("sampled", c[0].note + " sampled" if "exact" not in c[0].note else c[0].note)
+        c2 = self.ask(eng, spec, self.turn(guess_obs(1, 5000, [(first, "lower")]), None, turn=2))
+        second = int(c2[0].action.split()[1])
+        self.assertLess(second, first)
+        self.assertTrue(abs(second - first / 2.0) < first * 0.2, (first, second))
+
+    def test_with_few_hypotheses_left_it_names_a_possible_answer(self):
+        spec = self.install(GUESS, family="guessing", unknown=True, both=False, perfect=False)
+        eng = self.engine(guess.GuessEngine)
+        hist = [(32, "lower"), (16, "higher"), (24, "lower"), (20, "higher"), (22, "higher")]   # 23 is the only one left
+        c = self.ask(eng, spec, self.turn(guess_obs(1, 64, hist), None))
+        self.assertEqual(c[0].action, "guess 23")
+        hist = [(32, "lower"), (16, "higher"), (24, "lower"), (20, "higher")]                    # 21, 22, 23
+        c = self.ask(eng, spec, self.turn(guess_obs(1, 64, hist), None, turn=2))
+        self.assertIn(c[0].action, ("guess 21", "guess 22", "guess 23"))
+        self.assertEqual(c[0].action, "guess 22")                        # the middle one: right 1/3, else solved
+
+    def test_candidates_stay_inside_the_ladder_margin_of_the_best(self):
+        spec = self.install(GUESS, family="guessing", unknown=True, both=False, perfect=False)
+        eng = self.engine(guess.GuessEngine)
+        c = self.ask(eng, spec, self.turn(guess_obs(1, 64, [(32, "higher")]), None))
+        self.assertEqual(c[0].value, 1.0)
+        self.assertEqual(sorted((x.value for x in c), reverse=True), [x.value for x in c])
+        self.assertTrue(all(0.0 < x.value <= 1.0 for x in c))
+
+    def test_game_without_hidden_values_gives_no_candidates(self):
+        spec = self.install(PILE, family="guessing")
+        eng = self.engine(guess.GuessEngine)
+        self.assertEqual(self.ask(eng, spec, self.turn(PILE_OBS % 7, ["take 1", "take 2", "take 3"])), [])
+
+    def test_wrong_simulator_turns_it_off_for_the_game(self):
+        spec = self.install(GUESS, family="guessing", unknown=True, both=False, perfect=False)
+        eng = self.engine(guess.GuessEngine)
+        self.assertEqual(self.ask(eng, spec, self.turn("GUESS. nothing parsable here")), [])
+        self.assertTrue(eng.game_for(spec, self.turn("x", turn=2)).off)
+
+    def test_wrong_legal_list_turns_it_off_for_the_game(self):
+        spec = self.install(GUESS, family="guessing", unknown=True, both=False, perfect=False)
+        eng = self.engine(guess.GuessEngine)
+        self.assertEqual(self.ask(eng, spec, self.turn(guess_obs(1, 64, []), ["guess 1", "guess 2"])), [])
+        self.assertTrue(eng.game_for(spec, self.turn("x", turn=2)).off)
+
+    def test_slow_simulator_keeps_the_slice(self):
+        slow = GUESS.replace("def apply_action(state, action):\n", "def apply_action(state, action):\n    import time\n    time.sleep(0.004)\n")
+        spec = self.install(slow, family="guessing", unknown=True, both=False, perfect=False)
+        eng = self.engine(guess.GuessEngine)
+        t = time.monotonic()
+        c = self.ask(eng, spec, self.turn(guess_obs(1, 64, []), None))
+        self.assertLess(time.monotonic() - t, 1.0 + 1.0 + 0.5)
+        self.assertEqual(sandbox.live_count(), 0)
+        self.assertTrue(c)
+
+    def test_looping_simulator_is_killed(self):
+        loop = GUESS.replace("def apply_action(state, action):\n", "def apply_action(state, action):\n    while True:\n        pass\n")
+        spec = self.install(loop, family="guessing", unknown=True, both=False, perfect=False)
+        eng = self.engine(guess.GuessEngine)
+        self.assertEqual(self.ask(eng, spec, self.turn(guess_obs(1, 64, []), None)), [])
+        self.assertEqual(sandbox.live_count(), 0)
+
+    def test_switch(self):
+        spec = self.install(GUESS, family="guessing", unknown=True, both=False, perfect=False)
+        eng = self.engine(guess.GuessEngine)
+        with mock.patch.dict(os.environ, {"BOT_L3": "think_ahead"}):
+            self.assertEqual(self.ask(eng, spec, self.turn(guess_obs(1, 64, []), None)), [])
 
 
 class CacheCheckTests(Base):
