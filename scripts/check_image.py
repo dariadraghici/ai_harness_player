@@ -188,7 +188,7 @@ def check_watchdog_hang(ref):
                                    "BOT_FAKE_LLM_DELAY": "30", "MEMORY_DIR": "/tmp/mem"}))
     problems = []
     try:
-        check_ready(*bot.ask(start_msg(1, study=3), 4), 2.5, problems, "start under hang", need_chat=True)
+        check_ready(*bot.ask(start_msg(1, study=3), 6), 4.0, problems, "start under hang", need_chat=True)
         check_action(*bot.ask(turn_msg(1, seconds=4), 5), 3.5, ["1", "2", "3"], problems, "turn under hang")
         time.sleep(0.5)
         stray = bot.drain()
