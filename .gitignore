@@ -1,0 +1,27 @@
+# Secrets: never commit
+secrets.local.env
+dev.env
+*.env
+!*.env.example
+
+# Local run output of the practice arena
+results/
+memory/
+.memory/
+local_memory/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
