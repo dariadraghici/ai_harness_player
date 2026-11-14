@@ -768,6 +768,79 @@ def _part(payload):
     return 0, 1
 
 
+REPLY_CAP = 30            # opponent replies analysed at most (a spread sample of a longer list)
+REPLY_PLAYOUTS = 24       # playouts per reply when the tree cannot give a value
+
+
+def reply_rows(g, state, action, ab, clock, depth, payload, rng):
+    """The opponent's replies to `action`, each with its value for US (influence layer, PROMPT-CHAT section 4):
+    r_likely is the reply with the lowest value for us (best for them), r_target the highest (worst for them).
+
+    Each reply is searched by iterative deepening on a fresh table (or on `ab` when given) until the tree is solved
+    (exact) or its slice of the time is gone. An unsolved tree has leaves of value 0, which carries no information,
+    so then the value is the mean of random playouts instead (marked not exact). None when the reply is not an
+    opponent move (terminal, our own move again, a simultaneous step). Never raises."""
+    try:
+        s1 = g.apply(state, action)
+        if g.terminal(s1):
+            return None
+        mover = g.player(s1)
+        if mover not in (0, 1) or mover == g.me:
+            return None
+        replies = list(g.legal(s1))
+        if not replies:
+            return None
+        if len(replies) > REPLY_CAP:
+            stride = len(replies) / float(REPLY_CAP)
+            replies = [replies[int(i * stride)] for i in range(REPLY_CAP)]
+        unknown = bool(payload.get("unknown"))
+        cap = max(1000, int(payload.get("tt_entries") or TT_CAP))
+        rows = []
+        for i, r in enumerate(replies):
+            if clock.up() and rows:
+                break
+            child = g.apply(s1, r)
+            share = max(0.005, clock.left() / float(max(1, len(replies) - i)))
+            value, exact = None, False
+            if not unknown:
+                tree = ab if ab is not None else AlphaBeta(g, C.Clock(share), None, 0, cap=cap)
+                end = C.Clock(share * 0.6)
+                d = 1
+                try:
+                    while d <= 60:
+                        tree.clock = end
+                        v, horizon = tree.search(child, d, -INF, INF)
+                        value, exact = v, not horizon
+                        if exact or end.up():
+                            break
+                        d += 1
+                except (TimeUp, Unsupported):
+                    pass
+                if not exact and (value is None or abs(value) < 1e-9):
+                    value = None                     # leaves of value 0: no information, estimate by playouts
+            if value is None:
+                total, n = 0.0, 0
+                for _ in range(REPLY_PLAYOUTS):
+                    sample = C.seeded(child, rng.randrange(C.SEED_MAX)) if unknown else child
+                    try:
+                        v, _, _ = g.playout(sample, rng, PLAYOUT_CAP)
+                    except Exception:
+                        break
+                    total += v
+                    n += 1
+                    if n >= 4 and clock.up():
+                        break
+                if n:
+                    value = total / n
+            if value is not None:
+                rows.append({"action": r, "value": round(float(value), 4), "exact": bool(exact)})
+        if len(rows) < 2:
+            return None
+        return {"action": action, "rows": rows, "depth": int(depth)}
+    except Exception:
+        return None
+
+
 def _empty_part(root_key, la):
     """A part that was given no root move (more parts than moves): it adds nothing to the merge."""
     return {"ok": True, "live": True, "algo": "none", "solved": False, "depth": 0, "nodes": 0, "playouts": 0,
@@ -777,7 +850,8 @@ def _empty_part(root_key, la):
 def run(sim, payload):
     if sim is None:
         return {"ok": False, "reason": "no simulator loaded"}
-    clock = C.Clock(payload.get("budget_s") or 2.0)
+    budget = float(payload.get("budget_s") or 2.0)
+    clock = C.Clock(budget)
     g, state, reason = C.resolve(sim, payload)
     if g is None:
         return {"ok": False, "live": False, "reason": reason}
@@ -786,6 +860,12 @@ def run(sim, payload):
     fast = BitboardGame.create(g, state, la, payload.get("variant"))
     if fast is not None:
         g, state, la = fast, fast.initial, fast.legal(fast.initial)
+    if payload.get("replies_only"):
+        # the influence layer, after the search: the opponent's replies to the move we recommend (one short job on
+        # the same warm child, its own clock, a fresh table). Independent of how the search was split.
+        rng0 = random.Random(zlib.crc32(C.dump(payload.get("observation", "")).encode("utf-8")))
+        rows = reply_rows(g, state, str(payload.get("action") or ""), None, clock, 0, payload, rng0)
+        return {"ok": True, "live": True, "algo": "replies", "replies": rows, "actions": []}
     part, parts = _part(payload)
     # part 0 of 1 is exactly the sequential search; part i of n draws its own random numbers (root parallelism)
     rng = random.Random(zlib.crc32(C.dump(payload.get("observation", "")).encode("utf-8")) + part)

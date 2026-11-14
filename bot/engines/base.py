@@ -67,6 +67,12 @@ WARM_WATCH_PERIOD_S = 2.0
 # What the last candidates() call did, for the metrics line: workers used, warm or fresh, children alive.
 LAST_RUN: Dict[str, object] = {}
 
+# What the engine knows about the OPPONENT's replies to the move it recommends (chat/offense.py turns it into r_likely,
+# r_target and a gap; PROMPT-CHAT section 4). Cleared at the start of every candidates() call, so it is never stale.
+#   {"family", "game", "turn", "action": the engine's top candidate, "rows": [{"action","value","exact","p"?}],
+#    "matrix"?, "acts"?, "prev_action"?}
+LAST_REPLIES: Dict[str, object] = {}
+
 
 # ---------------------------------------------------------------- warm workers (one registry per process)
 class _Warm:
@@ -354,9 +360,35 @@ class SimEngine(BaseEngine):
                 outcomes[i] = {"ok": False, "kind": "timeout", "error": "part %d did not answer in time" % i}
         return outcomes
 
+    REPLY_BUDGET_S = 0.6         # time for the opponent's replies to the best move (influence layer, one short job)
+
+    def _reply_pass(self, spec, path, payload, turn_msg, cands, deadline, plan, warm, clock):
+        """After the search: ask the warm child for the value of every reply the opponent has to the move we
+        recommend, and publish the table in LAST_REPLIES. Own clock, own table: the answer does not depend on how
+        the search was split. Skipped when the deadline is near. Never raises."""
+        try:
+            top = max(cands, key=lambda c: c.value).action
+            budget = min(self.REPLY_BUDGET_S, deadline - time.monotonic() - 0.1)
+            if budget < 0.15:
+                return
+            pl = dict(payload, replies_only=True, action=top, budget_s=round(budget, 3))
+            pl.pop("cache", None)
+            pl.pop("known", None)
+            out = self._run_one(spec, path, pl, budget + 1.0, 0, 1, warm, plan, budget, clock)
+            res = out.get("result") if out.get("ok") else None
+            table = (res or {}).get("replies")
+            if isinstance(table, dict) and len(table.get("rows") or []) >= 2:
+                LAST_REPLIES.update(family=self.family, game=turn_msg.get("game_index"), turn=turn_msg.get("turn"),
+                                    action=top, rows=table["rows"])
+        except Exception:
+            log.exception("%s engine: reply table failed" % self.family)
+
     # ---- the one entry point
+    want_replies = False         # set by the ladder when the influence layer wants r_likely / r_target (costs ~8% of a slice)
+
     def candidates(self, specialist, turn_msg, deadline):
         t0 = time.monotonic()
+        LAST_REPLIES.clear()
         try:
             return self._candidates(specialist, turn_msg, deadline, t0)
         except Exception:
@@ -385,7 +417,9 @@ class SimEngine(BaseEngine):
         plan = resources.plan("turn_search")
         # BOT_SLICE_FRACTION wins; else the engine's own fraction (think_ahead 0.55), else the default
         fraction = plan.slice_fraction or float(getattr(self, "slice_fraction", SLICE_FRACTION))
-        budget = min(fraction * clock, deadline - time.monotonic() - 0.4)
+        # the influence layer's reply table needs a little time AFTER the search: it comes out of this slice
+        reserve = (self.REPLY_BUDGET_S + 0.2) if (self.want_replies and getattr(self, "reply_job", False)) else 0.0
+        budget = min(fraction * clock, deadline - time.monotonic() - 0.4 - reserve)
         if budget < SLICE_MIN_S:
             log.info("%s engine: no time (%.2fs)" % (self.family, budget))
             return []
@@ -394,7 +428,8 @@ class SimEngine(BaseEngine):
                    "legal_actions": [str(a) for a in legal] if isinstance(legal, list) and legal else None,
                    "variant": {"label": spec.label}, "budget_s": round(budget, 3),
                    "margin": config.CANDIDATE_MARGIN, "family": self.family,
-                   "tt_entries": plan.tt_entries, "samples_scale": plan.samples_scale}
+                   "tt_entries": plan.tt_entries, "samples_scale": plan.samples_scale,
+                   "want_replies": bool(self.want_replies)}
         try:
             from .bg_compute import load_policy
             payload["background"] = load_policy(spec)
@@ -458,6 +493,8 @@ class SimEngine(BaseEngine):
             return []
         self._count(spec, game, True)
         cands = self.build(res, spec, turn_msg, game) or []
+        if cands and self.want_replies and getattr(self, "reply_job", False):
+            self._reply_pass(spec, path, payload, turn_msg, cands, deadline, plan, warm, clock)
         log.info("%s engine: %d candidates in %.2fs (%s)" % (
             self.family, len(cands), time.monotonic() - t0, res.get("algo", "")))
         return cands

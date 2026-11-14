@@ -159,6 +159,10 @@ def merge_results(results):
         return {"ok": False, "live": True, "reason": "no part produced an action"}
     if len(results) == 1:
         return results[0]
+    return _merge_results(results)
+
+
+def _merge_results(results):
     if all(r.get("algo") in ("cache", "single", "tactical") for r in results):
         return results[0]                                # decided before the search: every part says the same
     ab = [r for r in results if r.get("algo") in ("alphabeta", "search-timeout")]
@@ -181,6 +185,7 @@ class SearchEngine(base.SimEngine):
     job_file = JOB_FILE
     slice_fraction = 0.55
     splittable = True
+    reply_job = True            # base asks the warm child for the opponent's replies to the best move (influence layer)
 
     def merge(self, results, payload):
         return merge_results(results)

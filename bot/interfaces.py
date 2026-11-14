@@ -30,6 +30,7 @@ class GameProfile:
     action_format: str = ""                # exact format from the rules text
     example_action: str = ""               # one valid action, used by L1 when legal_actions is null
     notes: str = ""
+    chat_is_move: bool = False             # talking IS the move (kind "move" chat, free-text actions); see chat/offense.py
 
     @staticmethod
     def from_dict(d: Optional[Dict[str, Any]]) -> "GameProfile":
@@ -45,6 +46,7 @@ class GameProfile:
             action_format=str(d.get("action_format") or ""),
             example_action=str(d.get("example_action") or ""),
             notes=str(d.get("notes") or ""),
+            chat_is_move=bool(d.get("chat_is_move")),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -74,6 +76,54 @@ class Decision:
     chat: str
     level: int
     why: str = ""
+    goal: Optional["InfluenceGoal"] = None   # the chat objective this chat line serves (chat/offense.py), if any
+
+
+@dataclass
+class InfluenceGoal:
+    """What the chat line of one turn is meant to do (PROMPT-CHAT section 4). Built in code, never by the model."""
+    kind: str = "quiet"            # induce_move, deter_move, induce_belief, build_credibility, quiet
+    tactic_id: str = "quiet"
+    target_action: str = ""        # the opponent action we try to induce or deter (may be filled from the model answer)
+    belief: str = ""               # the belief we try to install, as an intent for the model
+    gap: Optional[float] = None    # value gap between their likely and their worst reply; None = no engine
+    confidence: float = 0.0
+    is_control: bool = False       # a deliberate quiet turn that stands in for `shadow_tactic` (baseline)
+    shadow_tactic: str = ""
+    reveal: bool = False           # a deliberate reveal of private state (the leak check is relaxed)
+    lag: int = 0                   # rounds before the prediction can be scored (1 in simultaneous games)
+    opp_class: str = "unknown"
+    claim_subject: str = ""        # ledger key of the claim this line makes ("" = no claim)
+    claim_value: str = ""
+    claim_scope: str = "game"      # "game" or "match"
+    allow_claims: bool = False     # the line may state an intent or a plan (it is a tactic, not a leak)
+    alt_tactic: str = ""           # resolved from the chosen action in code (bluff: strength_claim when chips go in)
+    alt_when: str = ""             # regex on the action that switches to alt_tactic
+    resend: bool = False           # the previous answer was rejected: this is the same goal again
+    # phase 2: what the engine said about their replies to the move we play (chat/offense.py analyze_replies)
+    avoid_action: str = ""         # their likely reply (best for them): the one we try to deter or steer away from
+    from_engine: bool = False      # target_action / avoid_action come from the engine, not from the model
+    engine_action: str = ""        # the move of ours that the analysis assumes (the engine's top candidate)
+    replies: Optional[dict] = None # the reply table (rows with value for us) kept for their_quality_drop
+    promise_if: str = ""           # commitment: when they play this ...
+    promise_then: str = ""         # ... we answer with this (their best response, so the promise costs us nothing)
+    arm_info: Optional[dict] = None  # how the bandit chose (for the log), never sent anywhere
+    game: Any = None
+    turn: Any = None
+
+
+@dataclass
+class Outcome:
+    """The scored result of one influence goal, one decision (or one round, in simultaneous games) later."""
+    tactic_id: str = ""
+    scored: bool = False           # False: nothing to score (warning, no target, not yet)
+    hit: Optional[bool] = None
+    their_action: str = ""
+    their_quality_drop: Optional[float] = None
+    drop_exact: Optional[bool] = None   # every reply value behind the drop was exact (a solved tree), not an estimate
+    lag: int = 0
+    reason: str = ""
+    is_control: bool = False
 
 
 @dataclass

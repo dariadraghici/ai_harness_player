@@ -5,7 +5,7 @@ import re
 import threading
 import time
 
-from . import log, memory
+from . import config, log, memory
 
 _lock = threading.Lock()
 _OFFER_WORDS = re.compile(r"\b(?:offer|propose|bid|split|accept|reject)\b", re.I)
@@ -153,6 +153,185 @@ def record_game_end(team_id, end_msg, game_id=None):
             memory.write_json_atomic(memory.opponent_path(team_id), p)
     except Exception:
         log.exception("opponents.record_game_end failed")
+
+
+# ---------------------------------------------------------------- influence: who is listening (PROMPT-CHAT 6)
+CLASSES = ("silent", "scripted", "reactive", "unknown")
+MIN_DECISIONS = 3                 # our decisions before the chat of this match can say anything
+SILENT_SHARE = 0.2                # their lines per decision at or below this: nobody writes
+SCRIPTED_SIMILARITY = 0.7         # average similarity of consecutive lines at or above this: templated chatter
+REFERENCE_SHARE = 0.34            # share of their replies that echo our content words
+_STOP = {"the", "and", "that", "this", "with", "have", "your", "you", "are", "for", "was", "but", "not", "can",
+         "will", "what", "when", "then", "than", "they", "them", "their", "there", "from", "about", "would", "could",
+         "should", "just", "like", "game", "move", "turn", "here", "into", "over", "some", "very", "much", "more",
+         "now", "its", "let", "got", "our", "out", "all", "one", "too", "also", "still", "well"}
+_WORD = re.compile(r"[a-z0-9']+")
+
+
+def content_words(text, min_len=4):
+    return set(w for w in _WORD.findall(str(text or "").casefold()) if len(w) >= min_len and w not in _STOP)
+
+
+def _similarity(a, b):
+    wa, wb = content_words(a, 3), content_words(b, 3)
+    if not wa and not wb:
+        return 1.0 if str(a).strip() == str(b).strip() else 0.0
+    return len(wa & wb) / float(len(wa | wb) or 1)
+
+
+def classify(ctx, decisions, prior=None, tactic_stats=None):
+    """(class, signals): silent, scripted, reactive or unknown, from the match chat so far. Pure and cheap.
+
+    ctx: ChatContext of the whole match chat. decisions: how many decisions of ours this match has seen.
+    prior: the class this team had in earlier matches (used until this match has evidence).
+    tactic_stats: {tactic: {"scored": n, "hits": n}} of earlier influence attempts against this team."""
+    theirs = [l for l in (ctx.theirs if ctx else []) if getattr(l, "kind", "chat") != "move"]
+    texts = [l.text for l in theirs]
+    n = max(0, int(decisions))
+    signals = {"decisions": n, "their_lines": len(texts)}
+    # echo: their line right after one of ours that shares content words with it
+    pairs = refs = 0
+    last_ours = None
+    for line in (ctx.all_lines if ctx else []):
+        if line.sender == "you":
+            last_ours = line
+        elif last_ours is not None and getattr(line, "kind", "chat") != "move":
+            pairs += 1
+            if content_words(last_ours.text, 5) & content_words(line.text, 5):
+                refs += 1
+            last_ours = None
+    signals.update(reply_pairs=pairs, echoes=refs)
+    ratio = (refs / float(pairs)) if pairs else 0.0
+    sims = [_similarity(texts[i], texts[i + 1]) for i in range(max(0, len(texts) - 6), len(texts) - 1)]
+    dupes = len(texts) - len(set(" ".join(t.split()).casefold() for t in texts))
+    signals.update(repetition=round(sum(sims) / len(sims), 2) if sims else 0.0, duplicates=dupes)
+    stats = tactic_stats or {}
+    real = [v for k, v in stats.items() if k != "control" and isinstance(v, dict)]     # the baseline is not an attempt
+    scored = sum(_number(v.get("scored")) for v in real)
+    hits = sum(_number(v.get("hits")) for v in real)
+    signals.update(scored=scored, hits=hits)
+    reactive = (refs >= 2 and ratio >= REFERENCE_SHARE) or (scored >= 3 and hits / float(scored) >= 0.5)
+    scripted = len(texts) >= 3 and ((sims and sum(sims) / len(sims) >= SCRIPTED_SIMILARITY) or dupes >= 2)
+    if n >= MIN_DECISIONS and len(texts) <= SILENT_SHARE * n:
+        cls = "silent"
+    elif reactive:
+        cls = "reactive"
+    elif scripted:
+        cls = "scripted"
+    else:
+        cls = "unknown"
+    if cls == "unknown" and prior in ("silent", "scripted", "reactive") and n < MIN_DECISIONS:
+        cls = prior                       # no evidence yet in this match: what earlier matches taught us
+    return cls, signals
+
+
+def influence_section(profile):
+    """The influence part of a profile, reset when it was written by another harness version."""
+    sec = profile.get("influence") if isinstance(profile, dict) else None
+    if not isinstance(sec, dict) or sec.get("version") != config.HARNESS_VERSION:
+        sec = {"version": config.HARNESS_VERSION, "classes": {}, "tactics": {}, "last_lines": [], "tells": {},
+               "by_family": {}}
+    for key, default in (("classes", {}), ("tactics", {}), ("last_lines", []), ("tells", {}), ("by_family", {})):
+        if not isinstance(sec.get(key), type(default)):
+            sec[key] = default
+    return sec
+
+
+def prior_class(team_id):
+    """The class this team showed most often in earlier matches (needs two sightings), else None."""
+    try:
+        counts = influence_section(load(team_id))["classes"]
+        known = sorted(((_number(v), k) for k, v in counts.items() if k in ("silent", "scripted", "reactive")),
+                       reverse=True)
+        return known[0][1] if known and known[0][0] >= 2 else None
+    except Exception:
+        return None
+
+
+def tactic_stats(team_id):
+    try:
+        return dict(influence_section(load(team_id))["tactics"])
+    except Exception:
+        return {}
+
+
+def record_class(team_id, cls, signals=None, last_lines=()):
+    """Count the class seen in this match once per game end (small, atomic, versioned)."""
+    if not team_id or cls not in CLASSES:
+        return
+    try:
+        with _lock:
+            p = load(team_id)
+            p["team_id"] = str(team_id)
+            sec = influence_section(p)
+            _count(sec["classes"], cls)
+            if signals:
+                sec["last_signals"] = {k: v for k, v in signals.items() if isinstance(v, (int, float))}
+            lines = [" ".join(str(t).split())[:80] for t in last_lines if t][-3:]
+            if lines:
+                sec["last_lines"] = lines
+            p["influence"] = sec
+            memory.write_json_atomic(memory.opponent_path(team_id), p)
+    except Exception:
+        log.exception("opponents.record_class failed")
+
+
+def _bump(row, scored, hit):
+    _count(row, "attempts")
+    if scored:
+        _count(row, "scored")
+        if hit:
+            _count(row, "hits")
+
+
+def global_path():
+    import os
+    return os.path.join(memory.root(), "influence_global.json")
+
+
+def _global_section():
+    g = memory.read_json(global_path(), {})
+    if not isinstance(g, dict) or g.get("version") != config.HARNESS_VERSION or not isinstance(g.get("by_family"), dict):
+        g = {"version": config.HARNESS_VERSION, "by_family": {}}
+    return g
+
+
+def record_tactic(team_id, tactic, scored, hit, control=False, family=None):
+    """Per-tactic attempts, scored attempts and hits against this team (controls are counted apart), per family, and
+    the same over all teams in /memory/influence_global.json (the prior of the bandit). A lost update only loses a
+    count: several containers write at once."""
+    if not tactic:
+        return
+    key = "control" if control else str(tactic)
+    try:
+        with _lock:
+            if team_id:
+                p = load(team_id)
+                p["team_id"] = str(team_id)
+                sec = influence_section(p)
+                _bump(sec["tactics"].setdefault(key, {"attempts": 0, "scored": 0, "hits": 0}), scored, hit)
+                if family:
+                    fam = sec["by_family"].setdefault(str(family), {})
+                    _bump(fam.setdefault(key, {"attempts": 0, "scored": 0, "hits": 0}), scored, hit)
+                p["influence"] = sec
+                memory.write_json_atomic(memory.opponent_path(team_id), p)
+            if family and scored:
+                g = _global_section()
+                _bump(g["by_family"].setdefault(str(family), {}).setdefault(
+                    key, {"attempts": 0, "scored": 0, "hits": 0}), scored, hit)
+                memory.write_json_atomic(global_path(), g)
+    except Exception:
+        log.exception("opponents.record_tactic failed")
+
+
+def arm_stats(team_id, family):
+    """(own, global): {arm key: {"scored", "hits"}} for this team and for all teams, for one family."""
+    try:
+        own = influence_section(load(team_id))["by_family"].get(str(family), {}) if team_id else {}
+        glob = _global_section()["by_family"].get(str(family), {})
+        return dict(own), dict(glob)
+    except Exception:
+        return {}, {}
 
 
 def save_all():

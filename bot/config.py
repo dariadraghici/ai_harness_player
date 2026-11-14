@@ -26,6 +26,11 @@ TURN_SOFT_S = 6            # target time for a move (answer time is a tie-break)
 TURN_HARD_S = 13           # the watchdog sends the best move found so far
 
 LLM_MATCH_TIMEOUT_S = 8    # timeout of a model call during a match
+# Time kept for the model call (move + chat) after the engine: the engine's deadline is the hard deadline minus 2 s
+# minus this. Without it a long engine slice (think_ahead uses 55 percent of the clock) leaves the model about one
+# second, the call is skipped and the turn loses its chat and its influence line. BOT_L2_RESERVE_S=0 gives the old
+# behavior back.
+LLM_RESERVE_S = max(0.0, float(os.environ.get("BOT_L2_RESERVE_S", "3.0") or 3.0))
 
 # ---------------------------------------------------------------- model
 GATEWAY_BASE_URL = "https://llm.hackaton-2026.dvloper.io/v1"  # the ONLY model endpoint
