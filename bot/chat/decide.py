@@ -112,6 +112,11 @@ def build_decide_messages(spec, start_msg, turn_msg, ctx, candidates, legal):
         start_msg.get("seat", "?"), turn_msg.get("game_index", start_msg.get("game_index", "?")),
         start_msg.get("best_of", "?"), score.get("you", "?"), score.get("opponent", "?"),
         turn_msg.get("turn", "?")))
+    variant = start_msg.get("variant")
+    if isinstance(variant, dict) and len(variant) > 1:
+        # The settings of the drawn variant; a game may keep part of its setup here
+        # and not in the rules text (kit rulebook 5.6).
+        parts.append("VARIANT SETTINGS: " + json.dumps(variant, ensure_ascii=True)[:600])
     opp = opponents.summary(start_msg.get("opponent"))
     if opp:
         parts.append("OPPONENT HISTORY: " + opp)

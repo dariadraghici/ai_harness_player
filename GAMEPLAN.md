@@ -33,6 +33,29 @@ Conclusions:
 - Tie-breaks in knockouts: fewer warnings, then less answer time, then lower
   cost. So: no illegal moves, and answer fast.
 
+Added from the participant kit (14 Nov; details in `docs/ARENA-CONTRACT.md`,
+kit notes K1 to K14):
+
+- The three tournaments are one 30 point block: placement points (10, 7, 5,
+  3, 1) x weight (T1 x1, T2 x2, T3 x3) / 60 x 30. That is the 5 / 10 / 15
+  above. A team outside the top 8 of the round robin still gets 1.5 of the
+  T3 points.
+- Cost is a ratio: 2.5 x (cheapest team's average match spend / ours). Twice
+  the cheapest spend costs 1.25 points. Robustness: every game lost by a
+  timeout, a crash or a second bad answer costs 1.25 of 2.5.
+- Round robin: 4 games per match, all played, each board twice with seats
+  swapped; it decides the 8 finalists. T3 prepares only the six game slots
+  drawn for our match.
+- The rules text of a real game can differ from the one prep saw (the deal
+  can be embedded in the rules). Everything prep builds must be reusable for
+  another deal of the same variant (RULES 30).
+- The judges score harness design on: understanding the rules, tracking
+  state, verifying moves, tools and computation, memory, budget and time
+  management, and the chat (offense, defense, one decision). The brief
+  rates "the model writes a simulator, code picks the move" highest.
+- After each freeze the organizers' bot may check our chat in two games of
+  Tic-Tac-Toe: we must chat back and its words must reach our model call.
+
 ### A.2 The idea in plain words
 
 In prep the model writes a simulator of the game, the harness tests it
@@ -77,7 +100,7 @@ beliefs the engine uses.
 
 | Person | Area | Owns these paths |
 |---|---|---|
-| luckydevs-1 | runtime, operations, measurement, test games | `bot/protocol.py`, `bot/clock.py`, `bot/log.py`, `bot/llm.py`, `bot/memory.py`, `bot/metrics.py`, `scripts/`, `tests/`, `arena_local/`, `testgames/`, demo tools |
+| luckydevs-1 | runtime, operations, measurement, test games | `bot/protocol.py`, `bot/clock.py`, `bot/log.py`, `bot/llm.py`, `bot/memory.py`, `bot/metrics.py`, `scripts/`, `tests/`, `testgames/`, demo tools |
 | luckydevs-2 | chat and the language-centred families | `bot/chat/`, `bot/prompts/`, `bot/opponents.py`, `bot/engines/truth.py`, `bot/engines/guardrails.py`, `bot/engines/deals.py` |
 | luckydevs-3 | prep pipeline and computation engines (the hardest part) | `bot/prep/`, `bot/specialist.py`, `bot/engines/base.py`, `bot/engines/search.py`, `bot/engines/guess.py`, `bot/engines/simultaneous.py`, `bot/engines/bluff.py` |
 | Sebi | integration | `main` branch, merges, shared files, freezes and pushes |
@@ -94,10 +117,14 @@ Milestones:
 
 luckydevs-1:
 
+- [x] Practice on the organizers' arena-lite: `scripts/practice.py` and
+      `scripts/arena_lite.py` (the kit arrived at 14:00; our emulator
+      `arena_local/` is removed), `RESULT: CLEAN` check from the replay.
 - [ ] Batch runner: play N practice matches over all practice games against
-      the random bot and the sample bot (we have no sample bot: use
-      `--opponent self`); table with wins, warnings, timeouts, average and
-      maximum answer time, cost per match.
+      the random bot, the sample bot (`--opponent starter`, needs
+      `pip install openai`) and ourselves (`--opponent self`); table with
+      wins, warnings, timeouts, average and maximum answer time, cost per
+      match (`scripts/practice.py` `evaluate()` already reads a replay).
 - [ ] Harden `scripts/check_image.py` until it covers the whole checklist of
       ARENA-CONTRACT 2.9.
 - [ ] Metrics: every decision appends one JSON line (game, level used, time,
@@ -117,6 +144,9 @@ luckydevs-2:
       short and cache-friendly. Seen in practice: the model sometimes writes
       analysis before the JSON and hits `max_tokens` (then L1 is used).
 - [ ] Opening chat must not leak our plan (seen: "I'm opening in the center").
+      Seen again on arena-lite with the real model, also in move chat:
+      "Corner A1 for me, blocking your column and building my diagonal
+      toward C3". The chat must serve the move, not describe it.
 - [ ] Guardrails: extract the forbidden subject and its synonyms in prep;
       outgoing filter on action and chat (also the `ready` chat); a safe
       rewrite when a line is blocked.
@@ -128,7 +158,10 @@ luckydevs-3:
 - [ ] Game profile and family classification from the rules text (basic
       LLM version exists in `bot/prep/classify.py`).
 - [ ] Simulator generation: several candidates in parallel, fixed interface
-      (`bot/interfaces.py`, SIMULATOR_FUNCTIONS).
+      (`bot/interfaces.py`, SIMULATOR_FUNCTIONS). From the kit: the
+      `sample_turn` is always seat 0; the simulator must read the deal from
+      the observation (and `start.variant`), never from the prep rules text
+      (RULES 30).
 - [ ] Sandbox: generated code runs in a child process with time and memory
       limits and can never take down the bot.
 - [ ] Verification: the simulator parses every `sample_turn`; its legal
@@ -140,14 +173,24 @@ luckydevs-3:
 - [ ] Engine for Guessing: hypothesis set filtering and best-split choice.
 - [ ] Wire L3 into the ladder, only when verification passed (the plumbing
       exists; set `spec.verified` and `spec.simulator_path` in prep).
+- [x] A prepared specialist is found at `start` also when the rules text of
+      the game differs from prep: lookup by game and variant label
+      (`specialist.lookup_by_label`, done with the kit integration).
+- [ ] Fallback action when `legal_actions` is null and the model is down:
+      seen on arena-lite (Guess the Number) that a wrong example action
+      loses the game in two answers. First fix done (`example_from_rules`
+      now reads "Examples:"); still open: after a warning try the other
+      quoted examples of the rules before the last-resort "pass".
 
 ## Part D: phase 2, T1 until the T2 freeze (Sat 23:59)
 
 Milestones:
 
 - [ ] 18:00 - 20:00: watch T1, write down every lost game and why. Dinner.
-- [ ] T1's 4 games are released: run them locally and read the public
-      replays of the best teams.
+- [ ] T1's 4 games are released: `git pull` in `participant-kit/`, run them
+      locally (`python scripts/practice.py --list`) and read the public
+      replays of the best teams. Use the Practice page (10 runs per hour)
+      against dvloper House and dvloper Master with the pushed image.
 - [ ] 23:15: final `t2` push and digest check. Tag the commit. This is the
       most important push of the event.
 
@@ -155,8 +198,9 @@ luckydevs-1:
 
 - [ ] Three test games for the families the practice arena does not cover:
       a small betting game (Kuhn poker style), a negotiation or ultimatum
-      game, a simultaneous-move game with a payoff twist (`testgames/rps.py`
-      is a first one).
+      game, a simultaneous-move game with a payoff twist
+      (`testgames/rps_twist.py` is a first one). They are subclasses of
+      `arena.core.Game` (copy a practice game of the kit as a template).
 - [ ] Replay analysis tool: from match replays to a table of loss reasons
       per family.
 - [ ] Cost and speed report: tokens per call, cache hits, answer time; idle

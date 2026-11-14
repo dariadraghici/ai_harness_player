@@ -1,7 +1,8 @@
 # RULES
 
 Rules for every human and every coding agent on team `luckydevs`. Read this
-file first, then `READMEFIRST.md`, then `docs/ARENA-CONTRACT.md`. These rules
+file first, then `READMEFIRST.md`, then `docs/ARENA-CONTRACT.md` (and
+`participant-kit/PROTOCOL.md` from the organizers' kit). These rules
 are not suggestions. If a task conflicts with a rule, stop and ask your human;
 your human asks Sebi.
 
@@ -38,7 +39,7 @@ your human asks Sebi.
 
 | Person | Area | Owns these paths |
 |---|---|---|
-| luckydevs-1 | runtime, operations, measurement, test games | `bot/protocol.py`, `bot/clock.py`, `bot/log.py`, `bot/llm.py`, `bot/memory.py`, `bot/metrics.py`, `scripts/`, `tests/`, `arena_local/` (local practice arena), `testgames/` (test games), demo tools |
+| luckydevs-1 | runtime, operations, measurement, test games | `bot/protocol.py`, `bot/clock.py`, `bot/log.py`, `bot/llm.py`, `bot/memory.py`, `bot/metrics.py`, `scripts/`, `tests/`, `testgames/` (our own test games for arena-lite), demo tools |
 | luckydevs-2 | chat and the language-centred families | `bot/chat/`, `bot/prompts/`, `bot/opponents.py`, `bot/engines/truth.py`, `bot/engines/guardrails.py`, `bot/engines/deals.py` |
 | luckydevs-3 | prep pipeline and computation engines (the hardest part) | `bot/prep/`, `bot/specialist.py`, `bot/engines/base.py`, `bot/engines/search.py`, `bot/engines/guess.py`, `bot/engines/simultaneous.py`, `bot/engines/bluff.py` |
 | Sebi | integration | `main` branch, merges, shared files, freezes and pushes |
@@ -89,18 +90,28 @@ your human asks Sebi.
 
 ## Testing and budget
 
-25. Before "ready to merge": `python -m unittest` passes, and at least one
-    local practice match runs with zero warnings and zero timeouts
-    (`python scripts/practice.py --game <game>` prints `RESULT: CLEAN`).
+25. Before "ready to merge": `python -m unittest` passes (with the kit
+    present, so the arena-lite tests are not skipped), and at least one
+    local practice match on arena-lite runs with zero warnings and zero
+    timeouts (`python scripts/practice.py --game <game>` prints
+    `RESULT: CLEAN`; games: `tic_tac_toe`, `pig`, `guess_number`,
+    `rps_twist`, `nim_deal`). When you touched prep or the start path, also
+    run `--game nim_deal --prep` (its rules text changes with every deal).
 26. Use `BOT_FAKE_LLM=1` for protocol and unit tests. The dev key has a
     limited budget and 60 requests per minute shared by the whole team; do
     not run large batches without telling the team.
-27. Do not edit the practice arena engine. No official practice arena was
-    provided; ours is `arena_local/`, owned by luckydevs-1, and only
-    luckydevs-1 changes it. New test games go in the separate games folder
-    `testgames/` (or any folder passed with `--games-dir`).
+27. The practice arena is the organizers' `participant-kit/arena-lite`. The
+    whole `participant-kit/` folder is read-only and is never committed to
+    our repository (it is ignored; everyone clones it, see `READMEFIRST.md`).
+    Do not edit or add anything inside it. Our own test games go in
+    `testgames/`, as subclasses of `arena.core.Game`; `scripts/arena_lite.py`
+    makes arena-lite see them.
 28. Everything in the repository is written in English with plain ASCII
     characters.
 29. When you change what prep stores in `/memory`, bump `HARNESS_VERSION` in
-    `bot/config.py` (ask Sebi), or delete `results/memory/` locally;
-    otherwise old cached specialists are loaded.
+    `bot/config.py` (ask Sebi), or delete `memory/` in the repository root
+    locally; otherwise old cached specialists are loaded.
+30. What prep builds must work for a deal it has not seen: the rules text of
+    a real game can differ from the one in `prep` (ARENA-CONTRACT, kit note
+    K2). Never hard-code the sample deal of the prep rules or of the
+    `sample_turn` in a simulator, a parser or a playbook.

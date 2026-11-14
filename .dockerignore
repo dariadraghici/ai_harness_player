@@ -11,7 +11,6 @@ tests/
 docs/
 results/
 scripts/
-arena_local/
 testgames/
 memory/
 .memory/
@@ -32,3 +31,6 @@ venv/
 *~
 .DS_Store
 Thumbs.db
+
+# Organizers' participant kit
+participant-kit

@@ -13,6 +13,20 @@ REGISTRY = "harbor.hackaton-2026.dvloper.io"
 IMAGE_REPO = REGISTRY + "/luckydevs/bot"
 SECRETS = os.path.join(REPO, "secrets.local.env")
 DEV_ENV = os.path.join(REPO, "dev.env")
+KIT_URL = "https://git.hackaton-2026.dvloper.io/arena/participant-kit.git"
+
+
+def arena_lite_dir():
+    """Folder of the organizers' practice arena (the participant kit is NOT in our Git).
+
+    Default: <repo>/participant-kit/arena-lite. Another place: set BOT_ARENA_LITE.
+    Exits with the clone command when it is missing.
+    """
+    path = os.environ.get("BOT_ARENA_LITE") or os.path.join(REPO, "participant-kit", "arena-lite")
+    if not os.path.isfile(os.path.join(path, "arena", "__main__.py")):
+        sys.exit("arena-lite not found at %s\nGet the participant kit (it is ignored by our Git):\n"
+                 "  git clone %s participant-kit\nor set BOT_ARENA_LITE to its arena-lite folder." % (path, KIT_URL))
+    return os.path.abspath(path)
 
 
 def image_ref(tag):

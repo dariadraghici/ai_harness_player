@@ -67,3 +67,10 @@ FAKE_LLM_MODE = _env("BOT_FAKE_LLM_MODE", "ok").lower()  # ok, fail, hang
 FAKE_LLM_DELAY_S = float(_env("BOT_FAKE_LLM_DELAY", "60") or 60)
 MEMORY_DIR = _env("MEMORY_DIR", "/memory")
 TEAM_ID = _env("TEAM_ID", "luckydevs")
+
+# What the fake LLM builds in prep (canned profile and playbook) must never be
+# loaded by a run with the real model, and the other way round: both use the
+# same local memory folder in practice. A different version string keeps the
+# two caches apart (bot/memory.py ignores variants of another version).
+if FAKE_LLM:
+    HARNESS_VERSION += "-fake"

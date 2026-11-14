@@ -44,7 +44,7 @@ def classify_variant(game_name, label, rules, sample_turn, timeout, thinking=Tru
 
 
 _EXAMPLE_RE = re.compile(
-    r"(?:exactly like|for example|for instance|e\.g\.|such as|example:|like)\s*:?\s*\"([^\"\n]{1,60})\"",
+    r"(?:exactly like|for example|for instance|e\.g\.|such as|examples?:|like)\s*:?\s*\"([^\"\n]{1,60})\"",
     re.IGNORECASE)
 
 
