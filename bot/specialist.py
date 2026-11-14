@@ -13,7 +13,7 @@ import dataclasses
 import threading
 import time
 
-from . import config, log, memory
+from . import action_guard, config, log, memory
 from .interfaces import GameProfile, VariantSpec
 from .prep import classify, verify
 
@@ -93,6 +93,7 @@ def build_variant(game_id, game_name, label, rules, sample_turn, deadline, think
         # Simulator generation runs only in prep (prep/pipeline.py phase B), never
         # here: the cold path must stay fast.
         classify.write_analysis(game_id, rhash, analysis)   # before meta.json
+        action_guard.save_grammar(spec)
         memory.save_variant(spec)
     except Exception:
         log.exception("build_variant failed for %s/%s" % (game_id, label))

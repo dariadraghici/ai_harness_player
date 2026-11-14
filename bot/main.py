@@ -29,7 +29,7 @@ def run():
     import threading
     import time
 
-    from . import clock, config, ladder, llm, log, memory, metrics, opponents, resources, specialist
+    from . import action_guard, clock, config, ladder, llm, log, memory, metrics, opponents, resources, specialist
     from .engines import base as engines_base
     from .chat import decide, defense
     from .engines.bg_compute import BackgroundCompute
@@ -91,6 +91,10 @@ def run():
             if by_watchdog:
                 log.warning("watchdog answered %s (%s) after %.2fs" % (
                     req.type, source, time.monotonic() - req.t0))
+            if req.type == "turn":
+                ctx = {"spec": self.spec, "start": self.start_msg, "turn": req.msg}
+                obj = action_guard.emit_action(ctx, [obj], req.deadline)
+                source = "guarded-" + source
             if req.type == "prep":
                 resources.enter("idle")          # prep is over: no child alive, no warm cache, until the next start
             if req.answer(obj):
@@ -117,7 +121,7 @@ def run():
                 return protocol.ready(decide.clean_chat(config.OPENING_FALLBACK, prof))
             d = ladder.emergency(self.spec, req.msg)
             req.info = {"level": d.level, "why": d.why}
-            return protocol.action(d.action, d.chat)
+            return {"action": d.action, "chat": d.chat}
 
         # ------------------------------------------------------------ handlers
         def on_prep(self, msg):
@@ -173,13 +177,13 @@ def run():
             spec, start_msg = self.spec, self.start_msg
 
             def progress(d):
-                req.set_best(protocol.action(d.action, d.chat))
+                req.set_best({"action": d.action, "chat": d.chat})
                 req.info = {"level": d.level, "why": d.why}
 
             def work(r):
                 d = ladder.decide_turn(spec, start_msg, msg, r.deadline, progress, self.move_seconds, r.timing)
                 r.info = {"level": d.level, "why": d.why}
-                r.result = protocol.action(d.action, d.chat)
+                r.result = {"action": d.action, "chat": d.chat}
             self.spawn(req, work)
 
         def on_end(self, msg):

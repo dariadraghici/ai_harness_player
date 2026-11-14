@@ -209,9 +209,10 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
     t_l2 = time.monotonic()
     timing["l3_s"] = round(t_l2 - t_l3, 4)
     try:
-        timeout = min(clock.llm_match_timeout(turn_msg, move_seconds), deadline - time.monotonic() - 1.0)
-        if timeout < 1.0:
-            log.warning("L2 skipped: only %.1fs left" % (deadline - time.monotonic()))
+        left = deadline - time.monotonic()
+        timeout = min(clock.llm_match_timeout(turn_msg, move_seconds), left - 1.0)
+        if (warning and left <= 10.0) or left < 4.0:
+            log.warning("L2 skipped: warning/deadline emergency with %.1fs left" % left)
         else:
             res = decide_mod.decide(spec, start_msg, turn_msg, ctx, candidates, usable, timeout)
             if res:
