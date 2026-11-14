@@ -78,48 +78,79 @@ def _preferred_order(la, payload):
     return preferred + [action for action in la if action not in preferred]
 
 
+def immediate_wins(g, state, seat):
+    """Return actions that end the state with an exact win for `seat`."""
+    if g.player(state) != seat:
+        return []
+    wins = []
+    try:
+        actions = g.legal(state)
+    except Exception:
+        return wins
+    for action in actions:
+        try:
+            after = g.apply(state, action)
+            if g.terminal(after):
+                values = g.returns(after)
+                if values[seat] == 1.0:
+                    wins.append(action)
+        except Exception:
+            continue
+    return wins
+
+
 def tactical(g, state, la):
-    """Return forced wins, or moves that remove an immediate opponent win."""
-    player = g.player(state)
-    if player not in (0, 1) or player != g.me:
-        return None
-    wins, safe = [], []
-    opponent_threat = False
+    """Analyze immediate wins, blocks, suicide moves, and forced threats."""
+    if g.player(state) != g.me:
+        return {"wins": [], "safe": list(la), "unsafe": [], "forcing": []}
+    me, opponent = g.me, 1 - g.me
+    wins, safe, unsafe, forcing = [], [], [], []
     for action in la:
         try:
             child = g.apply(state, action)
             if g.terminal(child):
-                r = g.returns(child)
-                if r[g.me] > r[1 - g.me]:
+                values = g.returns(child)
+                if values[me] == 1.0:
                     wins.append(action)
+                elif values[me] == -1.0:
+                    unsafe.append(action)
+                else:
+                    safe.append(action)
                 continue
-            next_player = g.player(child)
-            threatened = False
-            if next_player == 1 - g.me:
-                for reply in g.legal(child):
-                    after = g.apply(child, reply)
-                    if g.terminal(after):
-                        r = g.returns(after)
-                        if r[1 - g.me] > r[g.me]:
-                            threatened = True
-                            break
-            if threatened:
-                opponent_threat = True
+            if g.player(child) != opponent:
+                safe.append(action)
+                continue
+            replies = g.legal(child)
+            blocking_replies, threat_replies, has_loss = [], [], False
+            for reply in replies:
+                after = g.apply(child, reply)
+                if g.terminal(after):
+                    values = g.returns(after)
+                    if values[me] == -1.0:
+                        has_loss = True
+                    continue
+                own_wins = immediate_wins(g, after, me)
+                if own_wins:
+                    threat_replies.append((reply, len(own_wins)))
+                else:
+                    blocking_replies.append(reply)
+            if has_loss:
+                unsafe.append(action)
             else:
                 safe.append(action)
+            if (not has_loss and threat_replies and len(blocking_replies) == 1
+                    and any(count >= 2 for _, count in threat_replies)):
+                forcing.append(action)
         except Exception:
-            continue
-    if wins:
-        return {"ok": True, "algo": "tactical", "solved": True, "depth": 2,
-                "nodes": 0, "playouts": 0, "actions": [
-                    {"action": action, "value": 1.0, "bound": None} for action in wins
-                ]}
-    if opponent_threat and len(safe) == 1:
-        return {"ok": True, "algo": "tactical", "solved": False, "depth": 2,
-                "nodes": 0, "playouts": 0, "actions": [
-                    {"action": action, "value": 1.0, "bound": None} for action in safe
-                ]}
-    return None
+            unsafe.append(action)
+    return {"wins": wins, "safe": safe, "unsafe": unsafe, "forcing": forcing}
+
+
+def tactical_result(actions, value, note, depth=2):
+    return {"ok": True, "algo": "tactical", "solved": value >= 1.0,
+            "depth": depth, "nodes": 0, "playouts": 0,
+            "actions": [{"action": action, "value": value, "bound": None, "tactical": note}
+                        for action in actions]}
 
 
 # ---------------------------------------------------------------- alpha-beta
@@ -137,7 +168,17 @@ class AlphaBeta:
 
     def leaf(self, s, key):
         if self.leaf_k <= 0:
-            return 0.0
+            cp = self.g.player(s)
+            if cp not in (0, 1):
+                return 0.0
+            threats = immediate_wins(self.g, s, cp)
+            if threats:
+                return 0.8 if cp == self.g.me else -0.8
+            try:
+                mobility = len(self.g.legal(s))
+            except Exception:
+                return 0.0
+            return 0.02 * mobility if cp == self.g.me else -0.02 * mobility
         rng = random.Random(zlib.crc32(key.encode("utf-8")))
         total, n = 0.0, 0
         for _ in range(self.leaf_k):
@@ -182,6 +223,9 @@ class AlphaBeta:
         cp = g.player(s)
         if cp not in (0, 1):
             raise Unsupported("a simultaneous step inside the tree")
+        winning = set(immediate_wins(g, s, cp))
+        if winning:
+            la = [a for a in la if a in winning] + [a for a in la if a not in winning]
         prev = e[4] if e is not None else None
         if prev in la:
             la = [prev] + [a for a in la if a != prev]
@@ -458,13 +502,36 @@ def run(sim, payload):
     try:
         root_key = g.key(state)
         cached = (payload.get("cache") or {}).get(root_key)
-        forced = None if (payload.get("unknown") or payload.get("both_seats") is False) else tactical(g, state, la)
-        if forced is not None:
-            forced["live"] = True
-            forced["root_key"] = root_key
-            forced["zero_sum"] = True
-            forced["branching"] = len(la)
-            return forced
+        analysis = None
+        if not payload.get("unknown") and payload.get("both_seats") is not False:
+            analysis = tactical(g, state, la)
+            if analysis["wins"]:
+                forced = tactical_result(analysis["wins"], 1.0, "immediate win")
+                forced["live"] = True
+                forced["root_key"] = root_key
+                forced["zero_sum"] = True
+                forced["branching"] = len(la)
+                return forced
+            if analysis["forcing"]:
+                forced = tactical_result(analysis["forcing"], 0.95, "double threat")
+                forced["live"] = True
+                forced["root_key"] = root_key
+                forced["zero_sum"] = True
+                forced["branching"] = len(la)
+                return forced
+            if analysis["unsafe"] and analysis["safe"]:
+                la = list(analysis["safe"])
+                if len(la) == 1:
+                    forced = tactical_result(la, 1.0, "mandatory block")
+                    forced["live"] = True
+                    forced["root_key"] = root_key
+                    forced["zero_sum"] = True
+                    forced["branching"] = len(la)
+                    return forced
+            elif analysis["unsafe"]:
+                # Every move loses immediately. Keep all actions so the deeper search
+                # can still choose the least bad line, but expose the tactical value.
+                payload["unsafe_actions"] = list(analysis["unsafe"])
         la = _preferred_order(la, payload)
         if isinstance(cached, dict) and set(cached) == set(la):
             acts = sorted(({"action": a, "value": float(v), "bound": None} for a, v in cached.items()),
@@ -490,6 +557,13 @@ def run(sim, payload):
             out = mcts(g, state, la, C.Clock(max(0.05, clock.left())), payload, rng)
         if out is None:
             return {"ok": False, "live": True, "reason": "the search produced no result within the budget"}
+        if analysis and analysis["unsafe"]:
+            unsafe = set(analysis["unsafe"])
+            for row in out["actions"]:
+                if row["action"] in unsafe:
+                    row["value"] = min(float(row["value"]), -0.99)
+                    row["tactical"] = "immediate opponent win"
+            out["actions"].sort(key=lambda row: row["value"], reverse=True)
         ab = out.pop("_ab", None)
         if ab is not None:
             out["known"] = export_known(g, ab, state, C.Clock(min(0.1, max(0.0, 0.5 * clock.left()))))
