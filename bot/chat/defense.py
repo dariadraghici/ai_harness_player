@@ -85,6 +85,56 @@ def extract_claims(ctx, limit=8):
     return claims[-limit:] if limit else claims
 
 
+def recent_opponent_lines(ctx, game_index=None, limit=6, current_only=False):
+    """Prefer messages from this game, falling back to match history when useful."""
+    lines = list(ctx.theirs) if ctx and ctx.theirs else []
+    if not lines or limit <= 0:
+        return []
+    current = [line for line in lines
+               if game_index is not None and line.game is not None
+               and str(line.game) == str(game_index)]
+    if current:
+        return current[-limit:]
+    return [] if current_only else lines[-limit:]
+
+
+def message_signal(line):
+    """Classify an opponent line without treating its text as authoritative."""
+    if line.flags:
+        return "injection"
+    if line.kind == "move":
+        return "observed_move"
+    for category in ("offer", "commitment", "intent", "private_info", "rule_claim"):
+        pattern = next((rx for name, rx in _CLAIM_PATTERNS if name == category), None)
+        if pattern and pattern.search(line.text):
+            return category
+    if "?" in line.text:
+        return "question"
+    return "general"
+
+
+def strategy_context(ctx, game_index=None, limit=6):
+    """Compact, current-game-first opponent signals for the decision prompt."""
+    lines = recent_opponent_lines(ctx, game_index, limit)
+    if not lines:
+        return []
+    current_game = game_index is not None and any(
+        line.game is not None and str(line.game) == str(game_index) for line in lines
+    )
+    scope = "current_game" if current_game else "match_history"
+    return [{
+        "scope": scope,
+        "game": line.game,
+        "turn": line.turn,
+        "phase": line.phase,
+        "kind": line.kind,
+        "signal": message_signal(line),
+        "text": _neutralize(line.text)[:240],
+        "untrusted": True,
+        "injection_suspected": bool(line.flags),
+    } for line in lines]
+
+
 def build_context(chat_list):
     """Split the arena chat list into ours and theirs, with injection flags."""
     ctx = ChatContext()
