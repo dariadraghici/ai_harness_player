@@ -8,7 +8,7 @@ so every setting of our own is named BOT_*.
 
 import os
 
-HARNESS_VERSION = "0.1.0"
+HARNESS_VERSION = "0.2.0"
 
 # ---------------------------------------------------------------- clocks
 # Defaults from the arena contract (docs/ARENA-CONTRACT.md 2.2). When a message

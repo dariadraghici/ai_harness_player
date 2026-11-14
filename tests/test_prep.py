@@ -479,7 +479,8 @@ class CodegenTests(TempMemory):
             if "TASK: classify" in messages[-1]["content"]:
                 return answer()
             return fenced(GOOD_MODULE)
-        with mock.patch("bot.llm.complete", side_effect=fake):
+        with mock.patch("bot.llm.complete", side_effect=fake), \
+                mock.patch("bot.prep.pipeline.mastery.refine", return_value={}):
             done = pipeline.run_prep(msg, time.monotonic() + 400)
             self.assertEqual(len(done), 1)
             self.assertEqual(sorted(calls), ["classify", "codegen-1", "codegen-2", "codegen-3"])

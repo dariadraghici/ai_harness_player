@@ -35,7 +35,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, wait
 
 from .. import config, log, memory, specialist
-from . import classify, codegen, sandbox, verify
+from . import classify, codegen, mastery, sandbox, verify
 
 # proposed for bot/config.py
 PHASE_B_END_FRACTION = 0.53      # generation ends here (509 s -> 270 s = 45% of 600 s)
@@ -61,6 +61,8 @@ def run_prep(msg, deadline):
     run_chains(done, analyses, t_start + PHASE_B_END_FRACTION * budget, t_start + VERIFY_END_FRACTION * budget)
     log.info("prep %s: simulators done in %.1fs: %d/%d variants verified" % (
         game_id, time.monotonic() - t_a, sum(1 for s in done if s.verified), len(done)))
+    mastery.refine(done, analyses, deadline)
+    log.info("prep %s: strategy mastery persisted in %.1fs" % (game_id, time.monotonic() - t_a))
     return done
 
 

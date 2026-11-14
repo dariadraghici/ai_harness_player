@@ -198,7 +198,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | Path | What it is / what it is for | Status |
 |---|---|---|
 | `bot/prep/__init__.py` | package marker | real |
-| `bot/prep/pipeline.py` | prep under the time budget: phase A (classify variants in parallel, cache lookup), family alignment across variants; then one chain per variant that wants a simulator, in parallel: candidates (`codegen`, until 53% of the budget) -> verification and repair rounds (`verify`, until 85%), sandbox children killed at that deadline; cached winners are not redone | real |
+| `bot/prep/pipeline.py` | prep under the time budget: phase A (classify variants in parallel, cache lookup), family alignment across variants; then simulator generation and verification, followed by deadline-bounded mastery self-play and playbook persistence | real |
 | `bot/prep/classify.py` | profile: code evidence (family signals, format sentences, quoted examples, sample facts) + one model call + field checks + at most one repair call; `analysis.json`; `align_families`; `call_model` (deadline-checked, capped prep model calls) | real |
 | `bot/prep/templates.py` | loader of the prep prompt templates in `bot/prep/prompts/` | real |
 | `bot/prep/prompts/classify_system.txt` | system prompt of the classify call (fields and what each is used for) | real |
@@ -217,6 +217,8 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/prep/codegen.py` | simulator generation: parallel candidates with different briefs, code extraction, static `ast` check (never executes code), files + manifest `candidates/index.json` (harness version and hash of the contract text; another one = no candidates), one repair round, `repair_simulator` (also called by `verify` with the failures of its checks) | real |
 | `bot/prep/verify.py` | verification, parent side: `verify_simulator` (one candidate through the job in a sandbox child -> `VerifyReport`), `compare` (differential test between candidates), `verify_variant` (verify all, repair rounds with rollback of a worse repair, fresh candidates when all fail, winner -> `simulator.py` + `verify.json`, `spec.verified`), `is_done` (harness version, contract, winner hash against the file on disk, live-check counters; sets `spec.verified` and this container's `spec.simulator_path`), `note_live` / `live_disabled` (counters of games with a failed live check, `live.json`), `turn_samples` (prep sample + stored real turns), `check_turn` (one real turn against a simulator, for the live check) | real |
 | `bot/prep/sandbox.py` | the only place where generated code runs: `Worker` (lazy, reusable, restarts after a kill), single calls (`call_simulator`) and jobs (`Worker.job`, `run_job`: one of our files runs next to the simulator), timeouts, at most 2 children, `kill_all`, `SandboxError` | real |
+| `bot/prep/mastery.py` | deadline-bounded post-verification self-play orchestration, aggregate strategy distillation, and `strategy.json` persistence | real |
+| `bot/prep/mastery_job.py` | standalone sandbox job that stress-tests verified simulators with generic random and greedy policies | real |
 | `bot/prep/verify_job.py` | the verification suite as a sandbox job (runs inside the child, standalone, never imported by the bot): load, sample parse, legal actions, contract behavior (no mutation, same result twice, JSON round trip), seeded random self-play with playouts per second, seed check (contract C11), stored real turns, traces for the differential test; mode `turn` for one turn | real |
 | `bot/prep/sandbox_child.py` | the program inside the child (`python -I -S`, standalone, never imported by the bot): limits itself (memory, CPU, files), hides stdout and stdin from generated code, serves load / call / job requests as JSON lines | real |
 | `bot/specialist.py` | per-variant registry: process -> memory -> same variant label (`lookup_by_label`) -> cold prep; `build_variant` (extension point); `check_simulator` settles the simulator claim of every spec loaded from memory or by label (verify.is_done, no child, once per spec); `for_start` also records our seat on the spec (`spec.seat`) for the engines | real |
@@ -248,6 +250,7 @@ during the event; falls back to a temp folder when not writable):
 <memory>/<game_id>/<rules_hash>/live.json        games in which the live check of the engines passed / failed (a variant that keeps failing is switched off)
 <memory>/opponents/<team_id>.json                 opponent profiles
 <memory>/metrics/<container_id>.jsonl             one line per answer / game end
+<memory>/<game_id>/<rules_hash>/strategy.json     aggregate prep self-play findings and safety checks
 ```
 
 Locally (arena-lite through `scripts/practice.py`, all ignored by Git):

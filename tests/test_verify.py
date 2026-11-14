@@ -444,7 +444,8 @@ class PipelineTests(Base):
             if "TASK: classify" in messages[-1]["content"]:
                 return answer(action_format="take <n>", example_action="take 1", action_regex="take [123]")
             return fenced(GOOD)
-        with mock.patch("bot.llm.complete", side_effect=model):
+        with mock.patch("bot.llm.complete", side_effect=model), \
+                mock.patch("bot.prep.pipeline.mastery.refine", return_value={}):
             done = pipeline.run_prep(msg, time.monotonic() + 400)
         spec = done[0]
         self.assertTrue(spec.verified)
@@ -459,7 +460,9 @@ class PipelineTests(Base):
         # A second prep of the same game: everything from the cache, no model call, no child.
         specialist._registry.clear()
         calls.clear()
-        with mock.patch("bot.llm.complete", side_effect=model), mock.patch("bot.prep.sandbox.run_job") as job:
+        with mock.patch("bot.llm.complete", side_effect=model), \
+                mock.patch("bot.prep.sandbox.run_job") as job, \
+                mock.patch("bot.prep.pipeline.mastery.refine", return_value={}):
             again = pipeline.run_prep(msg, time.monotonic() + 400)
             job.assert_not_called()
         self.assertEqual(calls, [])
