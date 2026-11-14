@@ -159,6 +159,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `scripts/push.py` | refuses dirty tree or mismatched image; Harbor login via stdin; push; digest; tag reminder | real |
 | `scripts/check_image.py` | automated pre-push checklist (platform, silent start, scripted session, practice match with prep on arena-lite, no secrets in image) | real |
 | `scripts/practice.py` | practice match on the organizers' arena-lite with `dev.env` (`--fake`, `--debug`, `--prep`, `--image`, `--opponent random/self/starter`); checks the replay and our logs and prints `RESULT: CLEAN` or the problems | real |
+| `scripts/batch_runner.py` | batch runner: plays N practice matches across games and opponents (random, self); prints ASCII metrics table (wins, warnings, timeouts, answer times, cost) | real |
 | `scripts/arena_lite.py` | runs any arena-lite command from the repository root and adds `testgames/` to its games, without editing the kit | real |
 | `scripts/keyinfo.py` | budget and spend of the dev key | real |
 | `tests/__init__.py` | sets `BOT_FAKE_LLM=1` for all tests | real |
@@ -166,6 +167,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `tests/test_protocol.py` | session, cold start, garbage, warning, null legal actions, watchdog, model failure, closed stdin | real |
 | `tests/test_units.py` | memory, ladder, JSON parsing, chat cleanup, defense block, clock proportions | real |
 | `tests/test_kit.py` | kit message shapes (example action from kit rules, specialist found by label, variant settings in the prompt) and five fake-LLM matches on arena-lite that must be CLEAN (skipped without the kit) | real |
+| `tests/test_batch_runner.py` | unit tests for batch runner: CLI argument parsing, replay parsing, metric aggregation, ASCII table formatting | real |
 | `testgames/nim_deal.py` | our own test game for arena-lite: Think ahead, Nim whose dealt heaps are written into the rules text, so the rules of `prep` and `start` differ (kit note K2); the check that prep work is reused for a new deal | real |
 | `testgames/rps_twist.py` | our own test game for arena-lite (`arena.core.Game` subclass): Read the opponent, simultaneous moves, payoff twist. New test games go here, in the same form | real |
 
