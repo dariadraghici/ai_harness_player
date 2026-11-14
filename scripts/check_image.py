@@ -24,6 +24,7 @@ Owner: luckydevs-1. Standard library only (RULES.md 23, 28).
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -220,13 +221,32 @@ def check_stdout_purity(ref):
 def check_proxy_and_security(ref):
     problems = []
     cmd = docker_cmd(ref, {"BOT_FAKE_LLM": "1", "HTTPS_PROXY": "http://127.0.0.1:8888",
-                           "NO_PROXY": "gateway,localhost", "MEMORY_DIR": "/tmp/mem"})
-    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    time.sleep(3)
-    if p.poll() is not None:
-        problems.append("container crashed when proxy variables injected")
-    p.stdin.close()
-    p.wait(10)
+                           "HTTP_PROXY": "http://127.0.0.1:8888",
+                           "NO_PROXY": "gateway,localhost,127.0.0.1", "MEMORY_DIR": "/tmp/mem"})
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        p.stdin.write(json.dumps(start_msg(1, study=4)) + "\n")
+        p.stdin.flush()
+        line = p.stdout.readline()
+        if not line:
+            problems.append("container crashed or produced no answer when proxy variables injected")
+        else:
+            try:
+                resp = json.loads(line)
+                if resp.get("type") != "ready":
+                    problems.append("container answered wrong type %r under proxy environment" % resp.get("type"))
+            except Exception as e:
+                problems.append("invalid JSON under proxy environment: %s" % e)
+        p.stdin.write(json.dumps({"type": "shutdown"}) + "\n")
+        p.stdin.flush()
+    except Exception as e:
+        problems.append("proxy check error: %s" % e)
+    finally:
+        try:
+            p.stdin.close()
+        except Exception:
+            pass
+        p.wait(10)
 
     insp = subprocess.run(["docker", "image", "inspect", ref, "--format", "{{json .Config.ExposedPorts}}"],
                           capture_output=True, text=True)

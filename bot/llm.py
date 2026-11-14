@@ -44,6 +44,20 @@ _last_call = {
     "failed": False,
 }
 
+# Direct opener bypassing all proxies for gateway model calls (ARENA-CONTRACT 2.1).
+# Model calls go straight to the gateway regardless of HTTP_PROXY/HTTPS_PROXY.
+_gateway_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def get_gateway_opener():
+    """Return opener configured to bypass proxies for direct gateway model calls."""
+    return _gateway_opener
+
+
+def get_general_opener():
+    """Return opener for general traffic honoring HTTPS_PROXY and NO_PROXY."""
+    return urllib.request.build_opener()
+
 
 def _key_id(api_key):
     return ("..." + api_key[-4:]) if api_key else "none"
@@ -179,7 +193,7 @@ def _complete(messages, max_tokens, timeout, thinking_budget, tag):
                 data=json.dumps(body).encode("utf-8"),
                 headers={"Authorization": "Bearer " + key["api_key"],
                          "Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with _gateway_opener.open(req, timeout=timeout) as r:
                 box["data"] = json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             try:

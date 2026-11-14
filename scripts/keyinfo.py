@@ -17,7 +17,9 @@ def main():
         sys.exit("LLM_API_KEY / LLM_BASE_URL missing in dev.env and secrets.local.env")
     root = base[:-3] if base.endswith("/v1") else base
     req = urllib.request.Request(root + "/key/info", headers={"Authorization": "Bearer " + key})
-    with urllib.request.urlopen(req, timeout=20) as r:
+    # Direct connection to the gateway bypassing any proxies (ARENA-CONTRACT 2.1)
+    direct_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with direct_opener.open(req, timeout=20) as r:
         info = json.load(r).get("info", {})
     budget = info.get("max_budget")
     spend = info.get("spend") or 0.0

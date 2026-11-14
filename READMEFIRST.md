@@ -170,6 +170,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `tests/test_batch_runner.py` | unit tests for batch runner: CLI argument parsing, replay parsing, metric aggregation, ASCII table formatting | real |
 | `tests/test_metrics.py` | unit tests for extended metrics logging: per-call tokens, cost calculation, decision recording | real |
 | `tests/test_check_image.py` | unit tests for pre-push checklist functions and ARENA-CONTRACT 2.9 validation | real |
+| `tests/test_proxy.py` | unit tests for proxy routing: direct gateway calls bypass proxy, general traffic honors HTTPS_PROXY, urllib honors NO_PROXY | real |
 | `testgames/nim_deal.py` | our own test game for arena-lite: Think ahead, Nim whose dealt heaps are written into the rules text, so the rules of `prep` and `start` differ (kit note K2); the check that prep work is reused for a new deal | real |
 | `testgames/rps_twist.py` | our own test game for arena-lite (`arena.core.Game` subclass): Read the opponent, simultaneous moves, payoff twist. New test games go here, in the same form | real |
 

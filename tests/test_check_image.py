@@ -12,6 +12,7 @@ from scripts.check_image import (
     check_no_secrets,
     check_platform,
     check_practice_match,
+    check_proxy_and_security,
     check_source_and_commit_label,
     docker_cmd,
 )
@@ -71,6 +72,39 @@ class CheckImageTests(unittest.TestCase):
         ok, detail = check_practice_match("myimage:tag", skip=True)
         self.assertTrue(ok)
         self.assertIn("skipped", detail)
+
+    @patch("subprocess.run")
+    @patch("subprocess.Popen")
+    def test_check_proxy_and_security_pass(self, mock_popen, mock_run):
+        proc = MagicMock()
+        proc.stdout.readline.return_value = '{"type": "ready", "chat": "Ready."}\n'
+        mock_popen.return_value = proc
+        mock_run.return_value = MagicMock(returncode=0, stdout="null\n", stderr="")
+        ok, detail = check_proxy_and_security("myimage:tag")
+        self.assertTrue(ok)
+        self.assertIn("proxy environment supported", detail)
+
+    @patch("subprocess.run")
+    @patch("subprocess.Popen")
+    def test_check_proxy_and_security_exposed_port(self, mock_popen, mock_run):
+        proc = MagicMock()
+        proc.stdout.readline.return_value = '{"type": "ready", "chat": "Ready."}\n'
+        mock_popen.return_value = proc
+        mock_run.return_value = MagicMock(returncode=0, stdout='{"8080/tcp":{}}\n', stderr="")
+        ok, detail = check_proxy_and_security("myimage:tag")
+        self.assertFalse(ok)
+        self.assertIn("exposes unnecessary listening ports", detail)
+
+    @patch("subprocess.run")
+    @patch("subprocess.Popen")
+    def test_check_proxy_and_security_crash(self, mock_popen, mock_run):
+        proc = MagicMock()
+        proc.stdout.readline.return_value = ""
+        mock_popen.return_value = proc
+        mock_run.return_value = MagicMock(returncode=0, stdout="null\n", stderr="")
+        ok, detail = check_proxy_and_security("myimage:tag")
+        self.assertFalse(ok)
+        self.assertIn("crashed or produced no answer", detail)
 
 
 if __name__ == "__main__":

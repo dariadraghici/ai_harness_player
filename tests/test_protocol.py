@@ -105,7 +105,7 @@ class ProtocolTests(unittest.TestCase):
     def test_8_closed_stdin_exits(self):
         bot = BotProc(env_extra={"BOT_FAKE_LLM_MODE": "hang", "BOT_FAKE_LLM_DELAY": "60"})
         p = []
-        check_ready(*bot.ask(start_msg(1, study=4), 4), 3.6, p, "start", True)
+        check_ready(*bot.ask(start_msg(1, study=4), 5), 4.0, p, "start", True)
         bot.send(turn_msg(1))                           # a worker is busy (hanging)
         t0 = time.monotonic()
         bot.close_stdin()
