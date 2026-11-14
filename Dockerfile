@@ -11,8 +11,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY bot /app/bot
 
-# Optional logo (at most 1 MB, at most 2048 px per side). TODO(luckydevs-1): add logo.png.
-# COPY logo.png /logo.png
+# Optional logo (at most 1 MB, at most 2048 px per side).
+COPY logo.png /logo.png
 
 # The arena runs `docker run -i --rm <image>` with no arguments.
 CMD ["python", "-u", "-m", "bot.main"]
