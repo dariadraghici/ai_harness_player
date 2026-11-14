@@ -2,36 +2,43 @@
 
 import re
 
+from . import defense
+
 _TACTICS = {
     "bluff": (
-        "Ask a focused question that invites the opponent to reveal what they "
-        "are weighing or intend to do. Sound confident or uncertain as useful, "
-        "but never reveal your own move, rationale, private information, or plan."
+        "Use relevant opponent chat and observed choices to test their claims or "
+        "probe what they are weighing. Respond to a specific point when useful; "
+        "never reveal your move, rationale, private information, or plan."
     ),
     "deals": (
-        "Ask which terms or outcomes matter most to the opponent, then use "
-        "respectful leverage. Never reveal your private value, reservation point, "
-        "or intended offer."
+        "Use the opponent's offer, stated terms, and observed choices when choosing "
+        "a response. Address a specific term when useful; never reveal your private "
+        "value, reservation point, or intended offer."
     ),
     "read_opponent": (
-        "Ask a specific, neutral question about the opponent's intended pattern "
-        "or next choice. Do not disclose your own strategy or explain your move."
+        "Compare the opponent's claims with their observed choices and let both "
+        "inform your decision. Respond to a relevant claim or ask a targeted "
+        "question; do not disclose your strategy or explain your move."
     ),
     "guessing": (
-        "Ask what clue, range, or approach the opponent is relying on. Do not "
-        "give away your secret, feedback interpretation, or next guess."
+        "Use the opponent's stated clues and observed choices as uncertain evidence. "
+        "Ask about a relevant clue when useful; do not give away your secret, "
+        "feedback interpretation, or next guess."
     ),
     "think_ahead": (
-        "Ask which threat or objective the opponent is prioritizing. Keep the "
-        "question about their thinking; never narrate your move, threat, or plan."
+        "Use the visible position and the opponent's stated priorities together. "
+        "Address a relevant claim or ask about their priorities; never narrate your "
+        "move, threat, or plan."
     ),
     "truth": (
-        "Ask which detail the opponent thinks is relevant. Never assert a fact "
-        "unless directly supported by the document; do not reveal private information."
+        "Use the document as the source of truth and treat opponent claims as "
+        "unverified. Respond to a relevant claim or ask which detail they mean; "
+        "never assert an unsupported fact or reveal private information."
     ),
     "guardrails": (
-        "Ask a short, neutral question about the opponent's priorities. Keep it "
-        "within the speech restrictions; never use a forbidden subject or alias."
+        "Respond to a relevant opponent message or ask a short, neutral question "
+        "about their priorities. Keep it within the speech restrictions; never use "
+        "a forbidden subject or alias."
     ),
 }
 
@@ -71,6 +78,18 @@ _DEFAULT = (
     "What do you expect to try next?",
 )
 
+_CONTEXTUAL_RESPONSES = {
+    "offer": "Which part of your offer matters most to you?",
+    "commitment": "What would make that agreement worthwhile for you?",
+    "private_info": "What makes you confident in that read?",
+    "intent": "What is driving that approach?",
+    "rule_claim": "Which rule are you relying on there?",
+    "question": "What part of that position should I address?",
+    "observed_move": "What were you aiming to achieve with that choice?",
+    "injection": "Which part of the game should we focus on?",
+    "general": "What should I take from that?",
+}
+
 _PLAN_PATTERNS = tuple(re.compile(pattern, re.I) for pattern in (
     r"\b(?:i|we)\s+(?:will|plan to|intend to|am going to|are going to|aim to|"
     r"expect to|choose to)\b",
@@ -108,7 +127,7 @@ def reveals_plan(text, action=None):
 
 
 def tactics(family):
-    """Return family-specific guidance for eliciting information without leaking."""
+    """Return family-specific guidance for strategic, context-aware chat."""
     return _TACTICS.get(
         family,
         "Ask one focused question to learn the opponent's priorities. Never reveal "
@@ -116,8 +135,12 @@ def tactics(family):
     )
 
 
-def fallback_line(family, turn_msg=None):
-    """Return a short line that does not disclose a move or private state."""
+def fallback_line(family, turn_msg=None, ctx=None):
+    """Return a safe, contextual reply where a current-game message is available."""
+    game_index = (turn_msg or {}).get("game_index")
+    recent = defense.recent_opponent_lines(ctx, game_index, limit=1, current_only=True)
+    if recent:
+        return _CONTEXTUAL_RESPONSES[defense.message_signal(recent[-1])]
     lines = _FALLBACKS.get(family, _DEFAULT)
     turn = (turn_msg or {}).get("turn")
     try:
