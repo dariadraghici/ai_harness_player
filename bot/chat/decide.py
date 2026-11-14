@@ -78,20 +78,63 @@ def parse_json_object(text):
     return None
 
 
-def clean_chat(text, profile=None, fallback=None):
+def _complete_json_string_field(text, name):
+    """Read one complete JSON string value even if later output was truncated."""
+    text = str(text or "")
+    start = text.find("{")
+    if start < 0:
+        return None
+    pattern = re.compile(r'"%s"\s*:\s*("(?:\\.|[^"\\])*")' % re.escape(name))
+    for match in pattern.finditer(text, start):
+        try:
+            value = json.loads(match.group(1))
+        except (TypeError, ValueError):
+            continue
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _match_legal(action, legal):
+    if not isinstance(action, str) or not isinstance(legal, list):
+        return None
+    if action in legal:
+        return action
+    normalized = " ".join(action.split()).casefold()
+    return next((candidate for candidate in legal
+                 if isinstance(candidate, str)
+                 and " ".join(candidate.split()).casefold() == normalized), None)
+
+
+def clean_chat(text, profile=None, fallback=None, action=None):
     """Chat post-processing: string, single line, <= 200 chars, never empty, filtered."""
+    family = profile.family if profile else "unknown"
     if not isinstance(text, str):
         text = ""
     text = " ".join(text.split())
     if len(text) > config.CHAT_MAX_CHARS:
         text = text[:config.CHAT_MAX_CHARS - 3].rstrip() + "..."
     if not text:
-        text = fallback or config.CHAT_FALLBACK
+        text = fallback or (offense.fallback_line(family) if profile else config.CHAT_FALLBACK)
+    if profile and family != "unknown" and text == config.OPENING_FALLBACK:
+        text = offense.fallback_line(family)
+    if offense.reveals_plan(text, action):
+        log.warning("replaced plan-revealing chat")
+        text = fallback if fallback and not offense.reveals_plan(fallback, action) else offense.fallback_line(family)
     try:
         filtered = guardrails.filter_outgoing(text, "chat", profile)
     except Exception:
         log.exception("guardrails.filter_outgoing failed on chat")
         filtered = guardrails.safe_chat(profile)
+    if not isinstance(filtered, str) or not filtered.strip():
+        filtered = guardrails.safe_chat(profile)
+    if offense.reveals_plan(filtered, action):
+        filtered = offense.fallback_line(family)
+        try:
+            filtered = guardrails.filter_outgoing(filtered, "chat", profile)
+        except Exception:
+            log.exception("guardrails.filter_outgoing failed on fallback chat")
+            filtered = guardrails.safe_chat(profile)
     if not isinstance(filtered, str) or not filtered.strip():
         filtered = guardrails.safe_chat(profile)
     return " ".join(filtered.split())[:config.CHAT_MAX_CHARS]
@@ -154,8 +197,8 @@ def build_decide_messages(spec, start_msg, turn_msg, ctx, candidates, legal):
         parts.append("TRUTH POLICY: answer only with a verbatim phrase supported by the document in OBSERVATION. If none supports an answer, use the exact unknown response specified in GAME RULES. Never infer or invent facts.")
     elif family == "deals" and candidates:
         parts.append("DEALS POLICY: choose only a listed engine candidate; code enforces our reservation limit. Your chat must not reveal that limit.")
-    parts.append('Reply now with only the JSON object, starting with "{": '
-                 '{"action": "...", "chat": "...", "why": "..."}')
+    parts.append('Reply immediately with one JSON object and no analysis: '
+                 '{"action": "...", "chat": "..."}')
     return [{"role": "system", "content": _system(spec, "decide_system.txt")},
             {"role": "user", "content": "\n\n".join(parts)}]
 
@@ -187,9 +230,15 @@ def decide(spec, start_msg, turn_msg, ctx, candidates, legal, timeout):
     text = llm.complete(msgs, max_tokens=config.DECIDE_MAX_TOKENS, timeout=timeout, tag="decide")
     obj = parse_json_object(text)
     if not obj:
-        if text:
-            log.warning("decide: no JSON object in answer: %r" % text[:200])
-        return None
+        partial_action = _complete_json_string_field(text, "action")
+        matched = _match_legal(partial_action, legal)
+        if matched is None:
+            if text:
+                log.warning("decide: no usable JSON object in answer: %r" % text[:200])
+            return None
+        log.warning("decide: salvaged legal action from incomplete JSON; using probe fallback chat")
+        obj = {"action": matched, "chat": offense.fallback_line(family, turn_msg),
+               "why": "salvaged legal action from incomplete JSON"}
     action = obj.get("action")
     if isinstance(action, (int, float)) and not isinstance(action, bool):
         action = str(action)
@@ -234,7 +283,8 @@ def decide(spec, start_msg, turn_msg, ctx, candidates, legal, timeout):
         return None
     if not isinstance(filtered_action, str) or not filtered_action.strip():
         return None
-    return {"action": filtered_action, "chat": chat, "why": why}
+    return {"action": filtered_action, "chat": clean_chat(chat, profile, action=filtered_action),
+            "why": why}
 
 
 def opening_chat(spec, start_msg, ctx, timeout):
