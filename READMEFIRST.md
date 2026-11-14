@@ -204,9 +204,11 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/prep/prompts/codegen_repair.txt` | user message of a repair call (`TASK: codegen-repair`): failures + current module | real |
 | `bot/prep/prompts/codegen_briefs.txt` | the working briefs that make parallel candidates differ (minimal, parser-first, numbered-checks) | real |
 | `tests/test_prep.py` | prep unit tests (mocked model): evidence, field checks, repair, playbook cap, alignment, analysis.json; code extraction, static check, generation + manifest + repair, deadlines, phase B, cold path without codegen | real |
+| `tests/test_sandbox.py` | sandbox tests with hand-written fixture simulators: endless loops, memory limit, recursion, SystemExit, print flood, results that cannot travel, child killed from outside, the cap of 2 children, `kill_all`, no key and no stdin in the child, the bot's stdout stays byte-exact | real |
 | `bot/prep/codegen.py` | simulator generation: parallel candidates with different briefs, code extraction, static `ast` check (never executes code), files + manifest `candidates/index.json`, one repair round, `repair_simulator` | real |
 | `bot/prep/verify.py` | simulator tests against sample turns, `VerifyReport` | stub |
-| `bot/prep/sandbox.py` | generated code in a killable child process | stub |
+| `bot/prep/sandbox.py` | the only place where generated code runs: `Worker` (lazy, reusable, restarts after a kill), single calls (`call_simulator`) and jobs (`Worker.job`, `run_job`: one of our files runs next to the simulator), timeouts, at most 2 children, `kill_all`, `SandboxError` | real |
+| `bot/prep/sandbox_child.py` | the program inside the child (`python -I -S`, standalone, never imported by the bot): limits itself (memory, CPU, files), hides stdout and stdin from generated code, serves load / call / job requests as JSON lines | real |
 | `bot/specialist.py` | per-variant registry: process -> memory -> same variant label (`lookup_by_label`) -> cold prep; `build_variant` (extension point) | real |
 | `bot/engines/__init__.py` | package marker | real |
 | `bot/engines/base.py` | `BaseEngine`, `NotAvailable`, registry family -> engine | real |
