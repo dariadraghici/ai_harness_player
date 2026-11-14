@@ -112,6 +112,11 @@ class SimEngine(BaseEngine):
             if not new and isinstance(turn, int) and isinstance(g.last_turn, int) and turn < g.last_turn:
                 new = True                    # the turn counter went back: a new game
             if new:
+                if g is not None:
+                    try:
+                        self.game_ended(key, g)
+                    except Exception:
+                        log.exception("game_ended failed")
                 g = self._games[key] = _Game(gi)
             if isinstance(turn, int):
                 g.last_turn = turn
@@ -119,6 +124,9 @@ class SimEngine(BaseEngine):
                 for k in list(self._games)[:-8]:
                     self._games.pop(k, None)
             return g
+
+    def game_ended(self, key, game: _Game):
+        """Called (under the lock) when a new game replaces this one. For engines that carry something over."""
 
     def reset(self):
         with self._lock:

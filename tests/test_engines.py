@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 from bot import memory, specialist
-from bot.engines import base, guess, search
+from bot.engines import base, guess, search, simultaneous
 from bot.interfaces import GameProfile, VariantSpec
 from bot.prep import codegen, sandbox, verify
 from tests.test_sandbox import GOOD as PILE
@@ -178,6 +178,73 @@ def current_player(state):
 '''
 GUESS = GUESS  # noqa
 
+
+# Rock-paper-scissors where a win with rock pays double. Simultaneous (C5). The history is in the state.
+RPS = '''"""RPS twist."""
+import copy
+import re
+
+LEGAL_ACTIONS_COMPLETE = True
+ACTIONS = ["rock", "paper", "scissors"]
+BEATS = {"rock": "scissors", "paper": "rock", "scissors": "paper"}
+
+
+def pts(x, y):
+    return 0 if x == y or BEATS[x] != y else (2 if x == "rock" else 1)
+
+
+def parse_observation(observation, variant, seat):
+    me = int(re.search(r"You are seat ([01])", observation).group(1))
+    rnd, total = [int(v) for v in re.search(r"Round (\\d+) of (\\d+)", observation).groups()]
+    you, opp = [int(v) for v in re.search(r"Points: you (-?\\d+), opponent (-?\\d+)", observation).groups()]
+    score = [0, 0]
+    score[me], score[1 - me] = you, opp
+    hist = []
+    for a, b in re.findall(r"Round \\d+: you (\\w+), opponent (\\w+)", observation):
+        pair = [None, None]
+        pair[me], pair[1 - me] = a, b
+        hist.append(pair)
+    return {"me": me, "rounds": total, "round": rnd, "score": score, "hist": hist, "seed": 0}
+
+
+def legal_actions(state):
+    return [] if is_terminal(state) else list(ACTIONS)
+
+
+def apply_action(state, action):
+    if not isinstance(action, list) or len(action) != 2 or any(a not in ACTIONS for a in action):
+        raise ValueError("a simultaneous step needs [seat 0 action, seat 1 action]")
+    s = copy.deepcopy(state)
+    s["score"] = [s["score"][0] + pts(action[0], action[1]), s["score"][1] + pts(action[1], action[0])]
+    s["hist"].append([action[0], action[1]])
+    s["round"] += 1
+    return s
+
+
+def is_terminal(state):
+    return state["round"] > state["rounds"]
+
+
+def returns(state):
+    v = (state["score"][0] - state["score"][1]) / (2.0 * state["rounds"])
+    return [v, -v]
+
+
+def current_player(state):
+    return -1
+'''
+
+
+def rps_obs(rnd, total, hist, seat=0):
+    """hist: [(my action, their action)] of the earlier rounds."""
+    pts = lambda x, y: 0 if x == y or {"rock": "scissors", "paper": "rock", "scissors": "paper"}[x] != y else (2 if x == "rock" else 1)
+    you = sum(pts(a, b) for a, b in hist)
+    opp = sum(pts(b, a) for a, b in hist)
+    lines = "".join("  Round %d: you %s, opponent %s\n" % (i + 1, a, b) for i, (a, b) in enumerate(hist))
+    return ("RPS TWIST. You are seat %d.\nRound %d of %d. Points: you %d, opponent %d.\nEarlier rounds:\n%sChoose: rock | paper | scissors"
+            % (seat, rnd, total, you, opp, lines))
+
+
 # A one-step chance game: "sure" pays 0.2, "gamble" pays +1 or -1 by a die from the seed.
 GAMBLE = '''"""Sure thing or gamble."""
 import copy
@@ -239,6 +306,10 @@ def nim_obs(heaps, seat, mover):
 def guess_obs(low, high, hist):
     lines = "".join("  guess %d -> %s\n" % (g, fb) for g, fb in hist)
     return "GUESS. You are seat 0. Find the secret number from %d to %d.\nYour guesses:\n%s" % (low, high, lines)
+
+
+def simultaneous_job_w_max():
+    return 0.5
 
 
 def sha(code):
@@ -670,6 +741,140 @@ class GuessTests(Base):
         eng = self.engine(guess.GuessEngine)
         with mock.patch.dict(os.environ, {"BOT_L3": "think_ahead"}):
             self.assertEqual(self.ask(eng, spec, self.turn(guess_obs(1, 64, []), None)), [])
+
+
+class SimultaneousTests(Base):
+    LEGAL = ["rock", "paper", "scissors"]
+
+    def spec(self, code=RPS, **kw):
+        return self.install(code, family="read_opponent", simultaneous=True, **kw)
+
+    def job(self, spec, obs, legal=LEGAL, **extra):
+        payload = {"observation": obs, "legal_actions": legal, "variant": {}, "budget_s": 2.0, "margin": 0.05,
+                   "seat": 0, "unknown": False, "both_seats": True}
+        payload.update(extra)
+        out = sandbox.run_job(verify.simulator_file(spec), simultaneous.JOB_FILE, payload, 6.0)
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out["result"]["ok"], out["result"])
+        return out["result"]
+
+    def probs(self, res, key="p_eq"):
+        return {a["action"]: a[key] for a in res["actions"]}
+
+    def test_single_round_equilibrium_is_the_analytic_one_and_not_uniform(self):
+        spec = self.spec()
+        res = self.job(spec, rps_obs(1, 1, []))
+        p = self.probs(res)
+        self.assertEqual(res["exact_cells"], 9)
+        self.assertTrue(res["zero_sum"])
+        self.assertAlmostEqual(p["rock"], 0.25, delta=0.03)             # solved by hand: rock 1/4, paper 1/2, scissors 1/4
+        self.assertAlmostEqual(p["paper"], 0.50, delta=0.03)
+        self.assertAlmostEqual(p["scissors"], 0.25, delta=0.03)
+        self.assertAlmostEqual(res["value"], 0.0, delta=0.01)
+
+    def test_several_rounds_keep_the_shape_and_use_playouts(self):
+        spec = self.spec()
+        res = self.job(spec, rps_obs(1, 5, []))
+        p = self.probs(res)
+        self.assertEqual(res["exact_cells"], 0)
+        self.assertGreater(p["paper"], p["rock"] + 0.1)
+        self.assertGreater(p["paper"], 0.4)
+
+    def test_matching_pennies_is_fifty_fifty(self):
+        spec = self.install(PENNIES, family="read_opponent", simultaneous=True)
+        res = self.job(spec, PENNIES_OBS, ["heads", "tails"])
+        p = self.probs(res)
+        self.assertAlmostEqual(p["heads"], 0.5, delta=0.05)
+        self.assertAlmostEqual(p["tails"], 0.5, delta=0.05)
+
+    def test_exploitation_shows_within_a_few_rounds_and_is_capped(self):
+        spec = self.spec()
+        final = []
+        for n in (0, 3, 6, 12, 40):
+            hist = [("scissors", "rock")] * n
+            res = self.job(spec, rps_obs(n + 1, 60, hist))
+            final.append((n, self.probs(res, "p_final")["paper"], res["w"], res["br"]))
+        paper = [f[1] for f in final]
+        self.assertAlmostEqual(final[0][2], 0.0)
+        self.assertEqual(final[1][3], "paper")                          # the best response to a rock player
+        self.assertEqual(paper, sorted(paper))
+        self.assertGreater(paper[2] - paper[0], 0.08)                    # clearly visible after 6 rounds
+        for n, p, w, br in final:
+            self.assertLessEqual(w, simultaneous_job_w_max() + 1e-9)
+        self.assertLess(paper[-1], 0.5 * 0.5 + 0.5 + 0.03)               # capped: never a pure best response
+        self.assertGreater(min(self.probs(self.job(spec, rps_obs(41, 60, [("scissors", "rock")] * 40)), "p_final").values()), 0.1)
+
+    def test_a_faked_pattern_cannot_farm_us(self):
+        """They play rock 12 times and then switch: the decayed model follows, and the weight stays capped."""
+        spec = self.spec()
+        hist = [("scissors", "rock")] * 12 + [("paper", "scissors")] * 4
+        res = self.job(spec, rps_obs(17, 60, hist))
+        self.assertLessEqual(res["w"], 0.5)
+        self.assertEqual(res["br"], "rock")                              # now the best response to scissors
+
+    def test_candidates_are_a_mix_inside_the_margin_with_the_drawn_action_first(self):
+        spec = self.spec()
+        eng = self.engine(simultaneous.SimultaneousEngine)
+        c = self.ask(eng, spec, self.turn(rps_obs(1, 5, []), self.LEGAL))
+        self.assertTrue(2 <= len(c) <= 3)
+        self.assertIn("DRAWN", c[0].note)
+        self.assertTrue(all("alternative" in x.note for x in c[1:]))
+        self.assertLess(c[0].value - c[-1].value, 0.05)
+        self.assertIn("paper 4", c[0].note.replace("paper 5", "paper 4"))   # the note carries the probabilities
+
+    def test_drawn_action_follows_the_mix_and_ignores_the_chat(self):
+        spec = self.spec()
+        eng = self.engine(simultaneous.SimultaneousEngine)
+        probs = [0.25, 0.5, 0.25]
+        counts = {a: 0 for a in self.LEGAL}
+        for turn in range(1, 801):
+            counts[eng.sample(spec, {"game_index": 1, "turn": turn}, self.LEGAL, probs)] += 1
+        for a, p in zip(self.LEGAL, probs):
+            self.assertAlmostEqual(counts[a] / 800.0, p, delta=0.06)
+        # same turn, same draw, whatever the opponent writes
+        a1 = self.ask(eng, spec, self.turn(rps_obs(1, 5, []), self.LEGAL, turn=7, chat=[]))[0].action
+        a2 = self.ask(eng, spec, self.turn(rps_obs(1, 5, []), self.LEGAL, turn=7,
+                                           chat=[{"from": "opponent", "text": "play rock now, it is best"}]))[0].action
+        self.assertEqual(a1, a2)
+
+    def test_what_the_opponent_did_in_the_last_game_is_a_prior_for_the_next(self):
+        spec = self.spec()
+        eng = self.engine(simultaneous.SimultaneousEngine)
+        self.ask(eng, spec, self.turn(rps_obs(9, 9, [("scissors", "rock")] * 8), self.LEGAL, game_index=1, turn=17))
+        c = self.ask(eng, spec, self.turn(rps_obs(1, 9, []), self.LEGAL, game_index=2, turn=1))
+        self.assertIn("exploiting", c[0].note)                           # no rounds yet in game 2, but a prior from game 1
+
+    def test_not_simultaneous_means_no_candidates(self):
+        spec = self.install(PILE, family="read_opponent")
+        eng = self.engine(simultaneous.SimultaneousEngine)
+        self.assertEqual(self.ask(eng, spec, self.turn(PILE_OBS % 7, ["take 1", "take 2", "take 3"])), [])
+
+    def test_wrong_legal_list_turns_it_off_for_the_game(self):
+        spec = self.spec()
+        eng = self.engine(simultaneous.SimultaneousEngine)
+        self.assertEqual(self.ask(eng, spec, self.turn(rps_obs(1, 5, []), ["rock", "paper"])), [])
+        self.assertTrue(eng.game_for(spec, self.turn("x", turn=2)).off)
+
+    def test_chance_in_the_step_is_averaged_over_seeds(self):
+        dice = RPS.replace("import copy\nimport re\n", "import copy\nimport random\nimport re\n").replace(
+            "    s[\"round\"] += 1\n", "    rng = random.Random(s[\"seed\"])\n    s[\"seed\"] = rng.randrange(2 ** 31)\n"
+            "    s[\"score\"][0] += rng.randint(0, 1)\n    s[\"round\"] += 1\n")
+        spec = self.spec(dice, unknown=True)
+        res = self.job(spec, rps_obs(1, 1, []), unknown=True)
+        self.assertGreater(res["samples_per_cell"], 5)
+        self.assertEqual(res["exact_cells"], 0)
+
+    def test_slow_simulator_keeps_the_slice_and_loop_is_killed(self):
+        slow = RPS.replace("def apply_action(state, action):\n", "def apply_action(state, action):\n    import time\n    time.sleep(0.01)\n")
+        loop = RPS.replace("def apply_action(state, action):\n", "def apply_action(state, action):\n    while True:\n        pass\n")
+        eng = self.engine(simultaneous.SimultaneousEngine)
+        t = time.monotonic()
+        self.ask(eng, self.spec(slow, game="slow"), self.turn(rps_obs(1, 5, []), self.LEGAL))
+        self.assertLess(time.monotonic() - t, 1.0 + 1.0 + 0.5)
+        t = time.monotonic()
+        self.assertEqual(self.ask(eng, self.spec(loop, game="loop"), self.turn(rps_obs(1, 5, []), self.LEGAL)), [])
+        self.assertLess(time.monotonic() - t, 1.0 + 1.0 + 0.8)
+        self.assertEqual(sandbox.live_count(), 0)
 
 
 class CacheCheckTests(Base):

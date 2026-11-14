@@ -226,7 +226,8 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/engines/sim_common.py` | helpers the engine jobs load by path (seat resolution and live check, canonical state text, hidden paths, world sampling by seeds, worlds written back into a state, view of a state without hidden parts, `Clock`) | real |
 | `bot/engines/guess.py` | Guessing, parent side: payload and candidates (relative values: the best split is 1.0, every 0.1 bit lost costs 0.05) | real |
 | `bot/engines/guess_job.py` | Guessing as a sandbox job: hypotheses = hidden values the simulator can draw consistent with the feedback (sampled by seeds, exact when small), every candidate action applied in every hypothesis, partition by what our view shows, expected information, credit for naming a possible answer, spread sample + neighbors on long action lists | real |
-| `bot/engines/simultaneous.py` | Read the opponent: mixed strategy + opponent model | stub |
+| `bot/engines/simultaneous.py` | Read the opponent, parent side: payload, the opponent's action counts of earlier games as a prior, and the draw of OUR action from the final mixed strategy (seeded from a per-process salt, the game and the turn; never from chat); candidates = drawn action first, the other supported actions inside the margin, probabilities in the note | real |
+| `bot/engines/simultaneous_job.py` | Read the opponent as a sandbox job: payoff matrices for the current simultaneous step (exact when the step ends the game, else playouts with common random numbers), regret matching (RM+, linear averaging), opponent frequency model read from the history in the parsed state (orientation found by a probe), capped exploitation (weight at most 0.5) | real |
 | `bot/engines/bluff.py` | Bluff: Monte Carlo over hidden states | stub |
 
 ## Where things are stored at runtime
