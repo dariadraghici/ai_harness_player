@@ -49,9 +49,9 @@ def lookup(game_id, rules):
 def build_variant(game_id, game_name, label, rules, sample_turn, deadline, thinking=True, source="prep"):
     """Build (classify + playbook) and store one variant. Never raises; returns a VariantSpec.
 
-    EXTENSION POINT (luckydevs-3): after classify, generate simulators
-    (prep/codegen.py), verify them (prep/verify.py), and set
-    spec.simulator_path / spec.verified only when verification passed.
+    Writes analysis.json (classify) before memory.save_variant writes meta.json.
+    Simulators are NOT generated here (see prep/pipeline.py phase B); set
+    spec.simulator_path / spec.verified only when verification passed (later).
     """
     rhash = memory.rules_hash(rules)
     spec = VariantSpec(game_id=game_id, game_name=game_name or "", label=label or "",
@@ -59,12 +59,14 @@ def build_variant(game_id, game_name, label, rules, sample_turn, deadline, think
     try:
         timeout = min(config.PREP_CALL_TIMEOUT_S, deadline - time.monotonic() - 2.0)
         if timeout > 2.0:
-            spec.profile, spec.playbook = classify.classify_variant(
+            spec.profile, spec.playbook, analysis = classify.analyze_variant(
                 game_name, label, rules, sample_turn, timeout, thinking=thinking)
         else:
-            spec.profile = classify._default_profile(sample_turn, rules)
+            spec.profile, analysis = classify.evidence_profile(rules, sample_turn)
             spec.source = "default"
-        # ---- EXTENSION POINT luckydevs-3: simulator generation + verification here.
+        # Simulator generation runs only in prep (prep/pipeline.py phase B), never
+        # here: the cold path must stay fast.
+        classify.write_analysis(game_id, rhash, analysis)   # before meta.json
         memory.save_variant(spec)
     except Exception:
         log.exception("build_variant failed for %s/%s" % (game_id, label))

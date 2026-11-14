@@ -1,0 +1,5 @@
+TASK: classify (second look)
+Code checked your answer against the rules text and found these problems:
+{{COMPLAINTS}}
+
+Read the rules again and answer again with the complete JSON object (all keys, same format). Fix the problems above; keep the fields that were right.
