@@ -15,7 +15,7 @@ import time
 
 from . import config, log, memory
 from .interfaces import GameProfile, VariantSpec
-from .prep import classify
+from .prep import classify, verify
 
 _lock = threading.Lock()
 _registry = {}      # (game_id, rules_hash) -> VariantSpec
@@ -36,14 +36,37 @@ def all_specs():
         return list(_registry.values())
 
 
+def check_simulator(spec):
+    """Settle the simulator claim of a spec that was not built in this process (memory, other container).
+
+    meta.json says `verified` and carries the absolute simulator path of whichever container did the
+    prep. verify.is_done looks at the truth, without starting a child: verify.json of this harness
+    version and contract, the winner's hash against simulator.py on disk, and the live-check counters.
+    It sets or clears spec.verified and spec.simulator_path for THIS container. The behavior of the
+    simulator is checked on every turn by the engines (the live check), not here. Once per spec object
+    (a plain attribute on it). Never raises."""
+    try:
+        spec._sim_checked = True
+        was = bool(spec.verified)
+        now = verify.is_done(spec)
+        if was != now:
+            log.info("specialist %s/%s: simulator claim %s -> %s after checking the files" % (
+                spec.game_id, spec.rules_hash, was, now))
+    except Exception:
+        log.exception("check_simulator failed for %s/%s" % (spec.game_id, spec.rules_hash))
+
+
 def lookup(game_id, rules):
-    """In process, else memory. None if not found."""
+    """In process, else memory. None if not found. A spec is checked once per process (check_simulator)."""
     rhash = memory.rules_hash(rules)
     spec = get(game_id, rhash)
     if spec:
+        if not getattr(spec, "_sim_checked", False):
+            check_simulator(spec)
         return spec
     spec = memory.load_variant(game_id, rhash, rules)
     if spec:
+        check_simulator(spec)
         put(spec)
         log.info("specialist %s/%s loaded from memory" % (game_id, rhash))
     return spec
@@ -82,7 +105,21 @@ def build_variant(game_id, game_name, label, rules, sample_turn, deadline, think
 
 
 def for_start(start_msg, deadline):
-    """Find or build the specialist for the drawn variant of a start message."""
+    """Find or build the specialist for the drawn variant of a start message.
+
+    The returned spec also carries `seat` (our seat in this game, or None): the engines need it to
+    parse the observation of a turn, and a turn message does not have it. (VariantSpec has no such
+    field; it is a plain attribute of the object, proposed as a field for bot/interfaces.py.)"""
+    spec = _for_start(start_msg, deadline)
+    try:
+        seat = start_msg.get("seat")
+        spec.seat = seat if seat in (0, 1) else None
+    except Exception:
+        pass
+    return spec
+
+
+def _for_start(start_msg, deadline):
     game_id = str(start_msg.get("game_id") or "unknown")
     rules = start_msg.get("rules") or ""
     variant = start_msg.get("variant") or {}
@@ -130,6 +167,7 @@ def lookup_by_label(game_id, label, rules):
         if base is None:
             return None
         spec = dataclasses.replace(base, rules=rules or "", source="label")
+        check_simulator(spec)       # this container's path, and the files as they are now
         log.info("specialist %s/%s (%s) reused by label: the rules text of this game (hash %s) "
                  "differs from prep" % (game_id, base.rules_hash, label, memory.rules_hash(rules)))
         return spec
