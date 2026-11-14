@@ -24,11 +24,30 @@ being right).
 """
 
 import os
+import re
 
 from ..interfaces import Candidate
 from . import base
 
 JOB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guess_job.py")
+
+
+def action_seen(action, observation):
+    """Whether an action already appears as a complete token in the observation."""
+    if not isinstance(action, str) or not isinstance(observation, str):
+        return False
+    text = " ".join(observation.casefold().split())
+    needle = " ".join(action.casefold().split())
+    if not needle:
+        return False
+    return re.search(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(needle), text) is not None
+
+
+def unseen_actions(actions, observation):
+    """Keep actions not already recorded by the game observation."""
+    if not isinstance(actions, list):
+        return []
+    return [action for action in actions if not action_seen(action, observation)]
 
 
 class GuessEngine(base.SimEngine):
@@ -38,7 +57,12 @@ class GuessEngine(base.SimEngine):
     def build(self, res, spec, turn_msg, game):
         out = []
         n = res.get("hypotheses", 0)
-        for a in res.get("actions") or []:
+        rows = res.get("actions") or []
+        unseen = set(unseen_actions([str(a.get("action", "")) for a in rows],
+                                    str(turn_msg.get("observation") or "")))
+        for a in rows:
+            if str(a.get("action", "")) not in unseen:
+                continue
             if res.get("algo") == "single":
                 note = "only legal move"
             else:

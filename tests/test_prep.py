@@ -53,6 +53,8 @@ TTT_SAMPLE = {"type": "turn", "turn": 1, "observation": "board empty", "legal_ac
               ["a1", "b1", "c1", "a2", "b2", "c2", "a3", "b3", "c3"], "seconds": 20, "chat": []}
 GUESS_RULES = ('Guess your secret number from 1 to 100; you get feedback higher or lower. '
                'Action format: the word guess, a space and a number, exactly like "guess 50".')
+WORD_RULES = ('Guess the secret 4-letter word. After each guess, report which letters are correct. '
+              'Action format: guess one 4-letter word, exactly like "guess slate".')
 
 
 def answer(**kw):
@@ -183,6 +185,18 @@ class ClassifyTests(TempMemory):
                                                   example_action="guess 37")], rules=GUESS_RULES, sample=None)
         self.assertEqual(a["action_regex"], r"guess \d{1,3}")
         self.assertEqual(prof.example_action, "guess 50")
+
+    def test_examples_are_filtered_to_variant_length(self):
+        self.assertEqual(classify.compatible_examples(WORD_RULES), [])
+        self.assertEqual(classify.action_length("", variant={"word_length": 4}), 4)
+        self.assertTrue(classify.action_shape_valid("guess mint", variant={"word_length": 4}))
+        self.assertFalse(classify.action_shape_valid("guess slate", variant={"word_length": 4}))
+        reply = answer(family="guessing", family_quote="4-letter word", perfect_information=False,
+                       action_format="guess one 4-letter word", action_regex=r"guess [a-z]{4}",
+                       example_action="guess slate")
+        prof, _, analysis, _ = self.run_classify([reply, reply], rules=WORD_RULES, sample=None)
+        self.assertEqual(prof.example_action, "")
+        self.assertEqual(analysis["rules_examples"], [])
 
     def test_untrusted_example_kept_when_nothing_else(self):
         rules = "Pick a number. Send the word pick and a number."

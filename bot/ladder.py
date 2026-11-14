@@ -73,7 +73,7 @@ def finalize(decision, spec, legal, rejected=None):
     return Decision(action, chat, decision.level, decision.why)
 
 
-def safe_action(spec, legal, rejected=None, profile=None):
+def safe_action(spec, legal, rejected=None, profile=None, observation="", variant=None):
     """L1. Never raises, never returns an empty string."""
     try:
         if legal:
@@ -84,17 +84,23 @@ def safe_action(spec, legal, rejected=None, profile=None):
                 if rejected is None or norm(a) != norm(rejected):
                     return a
             return legal[0]
-        # TODO(luckydevs-3): legal_actions is null. The stored example action is a
-        # weak fallback (it may be illegal in this position). Better: derive a
-        # legal action from the verified simulator, or from the observation.
+        from .prep import classify
+        current_turn = {"observation": observation} if observation else None
+        examples = classify.compatible_examples(
+            spec.rules if spec else "", current_turn, variant)
         ex = spec.profile.example_action if spec and spec.profile else ""
-        if ex and (rejected is None or norm(ex) != norm(rejected)):
-            return ex
+        examples = ([ex] if ex else []) + examples
+        for candidate in examples:
+            if classify.action_shape_valid(candidate, spec.rules if spec else "",
+                                           current_turn, variant) and (rejected is None or norm(candidate) != norm(rejected)):
+                return candidate
         if spec and spec.sample_turn and isinstance(spec.sample_turn.get("legal_actions"), list):
             for a in spec.sample_turn["legal_actions"]:
-                if rejected is None or norm(a) != norm(rejected):
+                if classify.action_shape_valid(str(a), spec.rules if spec else "", current_turn, variant) \
+                        and (rejected is None or norm(a) != norm(rejected)):
                     return str(a)
-        if ex and rejected is None:
+        if ex and rejected is None and classify.action_shape_valid(ex, spec.rules if spec else "",
+                                                                   current_turn, variant):
             return ex
         # Never resend the rejected action; "pass" is a last resort guess.
         return "pass" if norm("pass") != norm(rejected or "") else "0"
@@ -109,7 +115,8 @@ def emergency(spec, turn_msg):
         legal = turn_msg.get("legal_actions") if isinstance(turn_msg.get("legal_actions"), list) else None
         w = turn_msg.get("warning") if isinstance(turn_msg.get("warning"), dict) else {}
         profile = spec.profile if spec else None
-        a = safe_action(spec, legal, w.get("rejected"), profile)
+        a = safe_action(spec, legal, w.get("rejected"), profile,
+                        turn_msg.get("observation", ""), turn_msg.get("variant"))
         return finalize(Decision(a, offense.fallback_line(profile.family if profile else "unknown"),
                                  1, "watchdog emergency"), spec, legal, w.get("rejected"))
     except Exception:
@@ -139,17 +146,22 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
         legal = [str(a) for a in legal] if isinstance(legal, list) and legal else None
         warning = turn_msg.get("warning") if isinstance(turn_msg.get("warning"), dict) else None
         rejected = warning.get("rejected") if warning else None
+        profile = spec.profile if spec else None
+        family = profile.family if profile else "unknown"
         if warning:
             log.warning("previous answer rejected (%s/%s): %r reason=%s" % (
                 warning.get("count"), warning.get("max"), rejected, warning.get("reason")))
         usable = legal
+        if family == "guessing" and legal:
+            from .engines.guess import unseen_actions
+            unseen = unseen_actions(legal, str(turn_msg.get("observation") or ""))
+            if unseen:
+                usable = unseen
         if legal and rejected is not None:
-            usable = [a for a in legal if norm(a) != norm(rejected)] or legal
-        profile = spec.profile if spec else None
-        family = profile.family if profile else "unknown"
-
+            usable = [a for a in usable if norm(a) != norm(rejected)] or usable
         # L1 first, so the watchdog always has a legal move.
-        best = finalize(Decision(safe_action(spec, usable, rejected, profile),
+        best = finalize(Decision(safe_action(spec, usable, rejected, profile,
+                                             turn_msg.get("observation", ""), turn_msg.get("variant")),
                                  offense.fallback_line(family), 1, "safe move"), spec, usable, rejected)
         report(best)
     except Exception:

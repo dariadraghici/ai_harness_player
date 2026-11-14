@@ -11,7 +11,7 @@ from unittest import mock
 
 from bot import clock, config, memory
 from bot.chat import decide, defense, offense
-from bot.engines import guardrails
+from bot.engines import guardrails, guess
 from bot.engines.truth import enforce_answer
 from bot.interfaces import Candidate, GameProfile, VariantSpec
 from bot.prep import classify
@@ -115,9 +115,23 @@ class LadderTests(unittest.TestCase):
         self.assertEqual((d.level, d.action), (1, "a"))
         self.assertTrue(d.chat)
 
+    def test_guessing_does_not_repeat_observed_action(self):
+        spec = VariantSpec("g", "G", "v", "Guess a 4-letter word.", "h",
+                           profile=GameProfile(family="guessing"))
+        turn = {"type": "turn", "turn": 2, "observation": "Previous guess: guess slate -> absent.",
+                "legal_actions": ["guess slate", "guess crane", "guess mint"],
+                "seconds": 20, "chat": []}
+        d = ladder.decide_turn(spec, {}, turn, time.monotonic() + 10)
+        self.assertNotEqual(d.action.casefold(), "guess slate")
+        self.assertEqual(d.action, "guess mint")
+
     def test_candidate_margin(self):
         cs = [Candidate("a", 0.9), Candidate("b", 0.88), Candidate("c", 0.5)]
         self.assertEqual([c.action for c in ladder._within_margin(cs)], ["a", "b"])
+
+    def test_guess_action_history_matching_uses_whole_actions(self):
+        self.assertTrue(guess.action_seen("guess slate", "guess slate -> absent"))
+        self.assertFalse(guess.action_seen("guess slate", "guess slates -> absent"))
 
     def test_emergency_never_raises(self):
         self.assertEqual(ladder.emergency(None, {"legal_actions": None}).action, "pass")
@@ -226,6 +240,15 @@ class DecideAndDefenseTests(unittest.TestCase):
         self.assertIn("RECENT OPPONENT SIGNALS", prompt)
         self.assertIn('"signal": "observed_move"', prompt)
         self.assertIn("I will cooperate if you accept", prompt)
+
+    def test_decision_prompt_adds_family_risk_guidance(self):
+        for family, phrase in (("bluff", "pot odds"), ("read_opponent", "asymmetric reserve"),
+                               ("guessing", "Never repeat a prior guess")):
+            spec = VariantSpec("g", "G", "v", "RULES", "h",
+                               profile=GameProfile(family=family))
+            turn = {"observation": "state", "legal_actions": ["a"], "chat": []}
+            prompt = decide.build_decide_messages(spec, {}, turn, defense.build_context([]), [], ["a"])[1]["content"]
+            self.assertIn(phrase, prompt)
 
     def test_opening_prompt_includes_relevant_opponent_signal(self):
         ctx = defense.build_context([

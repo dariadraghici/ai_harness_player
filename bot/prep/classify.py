@@ -119,6 +119,52 @@ def quoted_examples(rules):
     return out
 
 
+def action_length(rules="", sample_turn=None, variant=None):
+    """Return an exact action payload length when the variant states one."""
+    texts = [str(rules or "")]
+    if isinstance(sample_turn, dict):
+        texts.append(str(sample_turn.get("observation") or ""))
+    if isinstance(variant, dict):
+        for key, value in variant.items():
+            if any(word in str(key).lower() for word in ("length", "letter", "slot", "character", "symbol")):
+                texts.append("%s %s" % (key, value))
+                if isinstance(value, int) and not isinstance(value, bool):
+                    texts.append("%d-letter" % value)
+    for text in texts:
+        for rx in _LENGTH_RX:
+            match = rx.search(text)
+            if match:
+                return int(match.group(1))
+    return None
+
+
+def action_shape_valid(action, rules="", sample_turn=None, variant=None):
+    """Check a concrete example against the variant's structural constraints."""
+    if not isinstance(action, str) or not action.strip():
+        return False
+    length = action_length(rules, sample_turn, variant)
+    legal = sample_turn.get("legal_actions") if isinstance(sample_turn, dict) else None
+    if length is None and isinstance(legal, list) and legal:
+        return match_legal(action, [str(a) for a in legal]) is not None
+    if length is None:
+        return True
+    words = re.findall(r"[A-Za-z]+", action)
+    return bool(words) and len(words[-1]) == length
+
+
+def compatible_examples(rules="", sample_turn=None, variant=None):
+    """Return quoted/sample examples that match the current variant shape."""
+    examples = []
+    legal = sample_turn.get("legal_actions") if isinstance(sample_turn, dict) else None
+    if isinstance(legal, list) and legal:
+        examples.extend(str(a) for a in legal if str(a).strip())
+    else:
+        examples.extend(quoted_examples(rules))
+    return [a for i, a in enumerate(examples)
+            if action_shape_valid(a, rules, sample_turn, variant)
+            and a not in examples[:i]]
+
+
 def _rx(*patterns):
     return [re.compile(p, re.IGNORECASE) for p in patterns]
 
@@ -166,6 +212,10 @@ _PERFECT_RX = _rx(r"\bperfect information\b", r"\bboth players see (the whole|ev
 _TALK_MOVE_RX = _rx(r"\b(your|the) (chat|message)\b.{0,40}\b(is|counts as|serves as) (your|the|a) (move|action)\b",
                     r"\btalking is the move\b")
 _FORMAT_CUES = ("action format", "format:", "your action", "your move", "send ", "answer with", "reply with")
+_LENGTH_RX = (
+    re.compile(r"\b(\d+)\s*[- ]?\s*letter(?:s)?\b", re.IGNORECASE),
+    re.compile(r"\b(\d+)\s+(?:slots?|characters?|symbols?)\b", re.IGNORECASE),
+)
 
 
 def _sentences(text):
@@ -413,7 +463,8 @@ def check_answer(obj, ev, rules):
     example = _clean_action(obj.get("example_action"))
     fields["example_raw"] = example
     legal = ev.get("legal_actions")
-    rules_ex = ev.get("quoted_examples") or []
+    rules_ex = [example for example in (ev.get("quoted_examples") or [])
+                if action_shape_valid(example, rules)]
     regex = obj.get("action_regex") if isinstance(obj.get("action_regex"), str) else ""
     rx = trusted_regex(regex, example, rules_ex, legal)
     if rx is not None:
@@ -423,9 +474,11 @@ def check_answer(obj, ev, rules):
         if m:
             fields["example_action"] = m
     elif example:
-        if rx is not None or not regex:
+        if action_shape_valid(example, rules) and (rx is not None or not regex):
             fields["example_action"] = example
-        if regex and rx is None and not rules_ex:
+        if not action_shape_valid(example, rules):
+            complaints.append("example_action %r does not match the variant's structural constraints" % example)
+        elif regex and rx is None and not rules_ex:
             complaints.append("your action_regex %r does not compile or does not fully match your "
                               "example_action %r" % (regex[:100], example))
     if not legal and not example and not rules_ex:
@@ -550,16 +603,15 @@ def resolve(fields, ev, rules, sample_turn):
     action_format = fields.get("action_format") or " ".join(ev.get("format_sentences") or [])
 
     legal = ev.get("legal_actions")
-    rules_ex = ev.get("quoted_examples") or []
+    rules_ex = compatible_examples(rules, sample_turn)
     if legal:
         example = fields.get("example_action") or legal[0]
         example_source = "model" if fields.get("example_action") else "sample"
     elif rules_ex:
         example, example_source = rules_ex[0], "rules"
-    elif fields.get("example_action"):
+    elif fields.get("example_action") and action_shape_valid(fields["example_action"], rules, sample_turn):
         example, example_source = fields["example_action"], "model"
-    elif fields.get("example_raw"):
-        # Failed the format check, but an empty example is worse (L1 sends it).
+    elif fields.get("example_raw") and action_shape_valid(fields["example_raw"], rules, sample_turn):
         example, example_source = fields["example_raw"], "model-unverified"
     else:
         example, example_source = "", "none"
@@ -579,7 +631,7 @@ def resolve(fields, ev, rules, sample_turn):
         "quote": fields.get("quote", ""), "quote_ok": bool(fields.get("quote_ok")),
         "action_regex": fields.get("action_regex", ""),
         "example_source": example_source,
-        "rules_examples": list(rules_ex)[:8],   # for the ladder: other format-valid actions after a warning
+        "rules_examples": list(rules_ex)[:8],   # for the ladder: other shape-valid actions after a warning
         "turn_structure": ts,
         "hidden_information": fields.get("hidden_information", "none" if perf else ""),
         "chance": fields.get("chance", ""),
@@ -602,7 +654,8 @@ def evidence_profile(rules, sample_turn, ev=None):
 def _default_profile(sample_turn, rules=""):
     """The old default (kept for callers): family unknown, example from rules or sample."""
     p = GameProfile()
-    p.example_action = example_from_rules(rules)
+    examples = compatible_examples(rules, sample_turn)
+    p.example_action = examples[0] if examples else ""
     if isinstance(sample_turn, dict) and isinstance(sample_turn.get("legal_actions"), list) \
             and sample_turn["legal_actions"]:
         p.example_action = str(sample_turn["legal_actions"][0])
