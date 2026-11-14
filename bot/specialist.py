@@ -3,10 +3,13 @@
 Owner: luckydevs-3. Status: real (base: profile + playbook; simulators later).
 
 Lookup order at start: this process -> /memory (another container of ours may
-have prepared it) -> a quick cold prep of that single variant inside the study
+have prepared it), both by the hash of the rules text -> the same game and
+variant label when the rules text of this game differs from the one prep saw
+(lookup_by_label) -> a quick cold prep of that single variant inside the study
 clock -> a default spec (rules only) if even that fails.
 """
 
+import dataclasses
 import threading
 import time
 
@@ -89,9 +92,47 @@ def for_start(start_msg, deadline):
         if not spec.rules:
             spec.rules = rules
         return spec
+    spec = lookup_by_label(game_id, label, rules)
+    if spec:
+        return spec
     # Cold: classify this single variant within the study clock. Keep some
     # time for the opening chat. Thinking only when the clock is long.
     left = deadline - time.monotonic()
     log.info("cold prep of %s/%s with %.0fs left" % (game_id, label, left))
     return build_variant(game_id, start_msg.get("game_name", ""), label, rules, None,
                          deadline - min(6.0, left * 0.25), thinking=left > 45, source="cold")
+
+
+def lookup_by_label(game_id, label, rules):
+    """The prepared spec of this game and variant label, re-targeted at these rules. None if none.
+
+    Why: the rules text in `start` is the text of THIS game's deal. When a game
+    embeds its setup in the rules (ARENA-CONTRACT, kit note K2), that text
+    differs from the one prep saw, the rules hash misses, and without this
+    lookup a prepared container would fall back to a cold prep inside the 30 s
+    study clock and lose its playbook and simulator. The label names the same
+    variant, so what prep built (profile, playbook, simulator) still applies;
+    only the rules text is replaced by the current one. rules_hash stays the
+    hash prep stored the variant under: it is the storage key of everything
+    prep built (memory.variant_dir, simulator candidates, analysis), not the
+    hash of the current text. Nothing is written to memory and the in-process
+    registry is not grown.
+    """
+    try:
+        if not label:
+            return None
+        with _lock:
+            cands = [s for s in _registry.values() if s.game_id == game_id and s.label == label]
+        if cands:
+            base = max(cands, key=lambda s: (bool(s.verified), bool(s.playbook), s.source == "prep"))
+        else:
+            base = memory.find_variant_by_label(game_id, label, rules)
+        if base is None:
+            return None
+        spec = dataclasses.replace(base, rules=rules or "", source="label")
+        log.info("specialist %s/%s (%s) reused by label: the rules text of this game (hash %s) "
+                 "differs from prep" % (game_id, base.rules_hash, label, memory.rules_hash(rules)))
+        return spec
+    except Exception:
+        log.exception("lookup_by_label failed for %s/%s" % (game_id, label))
+        return None

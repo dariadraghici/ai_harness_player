@@ -1,35 +1,122 @@
 # Arena contract
 
-This file is section 2 of `docs/PROMPT-INITIAL.md` (the authoritative summary
-of the rulebook), copied UNCHANGED below the line. Read it before changing
-anything in `bot/`.
+Section 2 below is section 2 of `docs/PROMPT-INITIAL.md` (our summary of the
+rulebook), copied UNCHANGED. Read it before changing anything in `bot/`.
 
-## Corrections and notes (read first)
+Since 14 Nov, 14:00 we also have the organizers' PARTICIPANT KIT. It is the
+authority; where it says more than section 2, the kit wins. It is not in our
+Git (it is its own repository); clone it into the repository root:
 
-- [NOTE, 14 Nov] The rulebook says a starter kit exists (a sample bot
-  `starter/main.py` with its Dockerfile, and the practice arena `arena-lite/`,
-  run with `python -m arena ...`). NO starter kit was provided to this
-  repository. Therefore:
-  - there are no differences to report between a starter kit and this
-    contract; this contract is the only source;
-  - every mention of `arena-lite`, `python -m arena` and `--env-file ../dev.env`
-    below refers to the official practice arena, which we do not have. Locally
-    we use OUR emulator `arena_local/` (`python -m arena_local practice ...`),
-    written from this contract only. Where the contract is silent, the emulator
-    makes simple choices (listed in `arena_local/runner.py`). Behavior of the
-    real arena may differ in those places;
-  - there is no `openai` version pin to copy: the bot uses only the Python
-    standard library (`urllib`) to call the OpenAI-compatible gateway, with
-    the same request body as the example in 2.6 (`extra_body` fields are sent
-    as top-level JSON fields, which is what the `openai` library does).
+```
+git clone https://git.hackaton-2026.dvloper.io/arena/participant-kit.git participant-kit
+```
+
+| In the kit | What it is |
+|---|---|
+| `participant-kit/PROTOCOL.md` | the message protocol (5 minutes; read it) |
+| `participant-kit/README.md` | the event: scoring, tournaments, prep, chat rule, model, submitting |
+| `participant-kit/CHANGELOG.md` | every change after kick-off |
+| `participant-kit/docs/AI-Harness-Arena-Rulebook.pdf` | the Candidate Rulebook, with the rule numbers the judges cite |
+| `participant-kit/arena-lite/` | the practice arena: the same match engine the organizers run, 3 practice games |
+| `participant-kit/starter/` | the sample bot (one model call per move) |
+
+## Kit notes (read first)
+
+Checked on 14 Nov against the kit and by running our bot on arena-lite.
+Section 2 contains nothing that the kit contradicts; these are the points the
+kit adds or makes precise. K1 to K4 change how we must build things.
+
+- [K1] `sample_turn` is always a turn of SEAT 0, from the middle of a sample
+  game (each seat has moved at least twice when the game allows it), with an
+  empty `chat`. It has no `seat` field. It comes from a sample deal, never
+  from a real game. It may be missing, and it does not always hold the full
+  history.
+- [K2] THE RULES TEXT IN `start` CAN DIFFER FROM THE RULES TEXT IN `prep`.
+  Rules texts may embed a setup (a position, heap sizes, a document, a prize
+  order). In `prep` that is a sample deal; in a real game the setup of THIS
+  game is in `start.rules` and/or `start.variant`, private state (cards,
+  secret number, hand) is in the first `turn.observation`, public history is
+  in `observation` and in the chat. There is no separate deal field
+  (rulebook 5.6). Consequences for us:
+  - a specialist keyed only by the hash of the rules text is not found at
+    `start` in such games. `bot/specialist.py` therefore falls back to the
+    same game and variant LABEL (`lookup_by_label`), and the decision always
+    gets the rules text of the current game;
+  - a generated simulator, a playbook or a parser must never hard-code the
+    sample deal: everything that belongs to the deal is read from the
+    observation (or from `start.rules` / `start.variant`) at run time.
+- [K3] `start.variant` is flat: the label plus the settings as top-level keys,
+  for example `{"label": "3x3 classic", "size": 3, "connect": 3}`. A `prep`
+  variant has only `label`, `rules` and (usually) `sample_turn`; the settings
+  arrive with `start`. The decision prompt includes the variant settings.
+- [K4] How an action is judged: the engine normalizes it per game (typically
+  lower case, trimmed, single spaces), a number is accepted as a string, and
+  an empty or missing `action` is a bad answer. `legal_actions` shows the
+  arena's spelling; we always send that spelling.
+- [K5] Chat details: `chat` in our answers is technically optional for the
+  engine but mandatory by the rules (2.5); the arena collapses whitespace and
+  cuts at 200 characters; an empty string is ignored; `comment` is an alias.
+  A line sent with a move reaches the opponent in its next message. The chat
+  on a rejected (warned) answer is dropped. `from: "you"` means our TEAM:
+  another of our containers (another game of the match) may have said it.
+- [K6] After each freeze the organizers may run a chat check: their bot plays
+  our frozen image in two games of Tic-Tac-Toe and makes small talk; they
+  note whether we chat back and whether its words show up in our model calls
+  (the gateway records the requests). It scores nothing but guides the code
+  review. Our decision call always contains the opponent's chat block.
+- [K7] Clocks and failures: a re-sent turn has a fresh clock; during `prep`
+  invalid lines are ignored; a cold container keeps the 120 s study clock for
+  the rest of the tournament; after a crash the next game of that kind is
+  played by a fresh cold container; `shutdown` is followed by a closed stdin
+  and 15 s to exit. The engine adds 0.5 s of transport slack to every clock;
+  we do not use it.
+- [K8] Thinking can overrun its budget by a lot (a 5000 token budget was seen
+  to use 9000 tokens and return no text). Keep generous `max_tokens` headroom
+  and always handle an empty answer. Arena keys have no per-minute limit; the
+  dev key has 60 requests per minute.
+- [K9] Matches: best of 3 from six drawn slots (three regular games, all
+  different, plus up to three sudden-death games); a 2-0 lead stops the match,
+  a 1.5-0.5 lead does not; in sudden death the first game won decides. Still
+  tied: fewer warnings, then less total answer time (accepted `ready` and
+  accepted actions only), then lower model cost, then a coin flip. Round
+  robin: 2 boards = 4 games, `best_of` 4, all played, games 1-2 and 3-4 are
+  the same game and variant with seats swapped; hidden-information games get
+  a fresh deal for the second game; a tied match stays a draw.
+- [K10] T3: the organizers draw six slots per match and our image is prepared
+  only for the games drawn for our match (not all 21). Four of the 21 games
+  are reserved for the final. T1's 4 games are added to arena-lite after T1,
+  T2's 8 after T2 (the organizers hand out the updated kit: `git pull` in
+  `participant-kit/`).
+- [K11] Scoring formulas: cost = 2.5 x (cheapest team's average match spend /
+  ours); only match keys count, prep spend does not. Robustness = 2.5 minus
+  1.25 for every game lost by timeout, invalid JSON, wrong type, illegal or
+  missing action, crash, absent image or forfeit; a warning alone costs
+  nothing there.
+- [K12] Other rules: no human may look at or touch a bot, its `/memory` or
+  its logs in the arena after kick-off (7.8); remote MCP servers only for
+  non-game content (7.11); abusive chat includes sexual content (13.1); the
+  logo may also be `/logo.webp` or `/logo.jpg`; extra environment variable
+  `NODE_USE_ENV_PROXY=1`.
+- [K13] The Practice page `https://arena.hackaton-2026.dvloper.io/#/practice`:
+  sign in with the practice token, pick the tag of an image we PUSHED, a game
+  and an opponent (Prompt Only, dvloper House, dvloper Master, our own image,
+  or a human in the browser). One run at a time per team, 10 runs per team
+  per hour, 1 to 3 games per run, closed while a tournament or its prep runs.
+  Nothing there counts for the score. This replaces the old [OPEN] note.
+- [K14] Local practice: every mention of `arena-lite` and `python -m arena` in
+  section 2 now means `participant-kit/arena-lite`. We run it through
+  `python scripts/practice.py` (see `READMEFIRST.md`). Our own emulator
+  `arena_local/` was removed on 14 Nov. The bot still uses only the Python
+  standard library (`urllib`) for the gateway; the starter's `openai` pin
+  (`openai>=3,<4`) is not needed.
 - [VERIFIED, 14 Nov] Dev key: `GET https://llm.hackaton-2026.dvloper.io/key/info`
   answers `{"info": {"max_budget": 6.0, "spend": ..., "rpm_limit": 60, "models": ["haiku"], ...}}`.
 - [VERIFIED, 14 Nov] A call with `"thinking": {"type": "disabled"}` and
   `max_tokens` 20 returns content and a `usage` object with `prompt_tokens`,
   `completion_tokens` and `prompt_tokens_details.cached_tokens`.
-- [OPEN] The practice page (`https://arena.hackaton-2026.dvloper.io/#/practice`)
-  needs a practice token (`PRACTICE_TOKEN` in `secrets.local.env`). How it is
-  used is not documented here; Sebi checks it by hand.
+- [VERIFIED, 14 Nov] Our bot on arena-lite (local command and image, with and
+  without `--prep`, fake and real model): no warning, no timeout, no stray
+  stdout line, chat on every answer.
 
 ---------------------------------------------------------------------------
 

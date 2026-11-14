@@ -8,7 +8,8 @@ Checks:
   2. `docker run -i --rm <image>` starts, prints nothing, keeps waiting
   3. scripted session against the IMAGE (fake LLM): valid answers in time,
      match_over does not exit, stdout purity, clean shutdown
-  4. a practice match with prep against the random bot, played by the IMAGE
+  4. a practice match with prep against the random bot, played by the IMAGE on the
+     organizers' arena-lite (scripts/practice.py; needs participant-kit/)
   5. no secret file inside the image
 Not automated (check by hand): registry digest after push (scripts/push.py
 prints it), proxy behavior in the real arena, source pushed to Gitea.
@@ -21,7 +22,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _common import DEV_ENV, REPO, image_ref  # noqa: E402
+from _common import REPO, image_ref  # noqa: E402
 from tests.session_script import run_session  # noqa: E402
 
 
@@ -73,13 +74,15 @@ def main():
     bot.cleanup()
 
     # 4. practice match with prep against the random bot, played by the image
-    cmd = [sys.executable, "-m", "arena_local", "practice", "--game", "tictactoe", "--prep",
-           "--image", ref, "--games", "2", "--env-file", DEV_ENV]
+    # (the organizers' arena-lite; Tic-Tac-Toe is also the game of their chat check)
+    cmd = [sys.executable, os.path.join(REPO, "scripts", "practice.py"), "--game", "tic_tac_toe", "--prep",
+           "--image", ref, "--games", "2"]
     if not real:
-        cmd += ["--set", "BOT_FAKE_LLM=1"]
+        cmd += ["--fake"]
     r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
-    print(r.stdout[-1500:])
-    report("practice match with prep (image, %s LLM)" % ("real" if real else "fake"), r.returncode == 0)
+    print((r.stdout + r.stderr)[-1500:])
+    report("practice match with prep (image, %s LLM)" % ("real" if real else "fake"),
+           r.returncode == 0 and "RESULT: CLEAN" in r.stdout)
 
     # 5. no secrets in the image
     r = subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64", "--entrypoint", "sh", ref,

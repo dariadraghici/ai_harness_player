@@ -25,3 +25,6 @@ venv/
 *~
 .DS_Store
 Thumbs.db
+
+# Organizers' participant kit (its own Git repository; clone it, never commit it)
+participant-kit

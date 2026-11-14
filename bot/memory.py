@@ -189,6 +189,44 @@ def load_variant(game_id, rhash, rules=""):
         return None
 
 
+def find_variant_by_label(game_id, label, rules=""):
+    """A stored variant of this game with this label, whatever its rules hash. None if none.
+
+    The rules text of a real game can differ from the text prep saw (the rules
+    may embed that game's deal: a position, a document, a prize order), so the
+    rules hash of `start` can miss a prepared variant. The label still names
+    the variant. Prefers a verified variant, then one with a playbook, then the
+    newest. The result carries `rules` (the caller's text), not the stored one.
+    """
+    try:
+        if not label:
+            return None
+        gdir = os.path.join(root(), safe_name(game_id))
+        best = None
+        for name in os.listdir(gdir):
+            mpath = os.path.join(gdir, name, "meta.json")
+            if not os.path.isfile(mpath):
+                continue
+            meta = read_json(mpath)
+            if not meta or meta.get("harness_version") != config.HARNESS_VERSION:
+                continue
+            if str(meta.get("label") or "") != str(label):
+                continue
+            try:
+                has_playbook = os.path.getsize(os.path.join(gdir, name, "playbook.md")) > 0
+            except OSError:
+                has_playbook = False
+            rank = (bool(meta.get("verified")), has_playbook, os.path.getmtime(mpath))
+            if best is None or rank > best[0]:
+                best = (rank, name)
+        return load_variant(game_id, best[1], rules) if best else None
+    except FileNotFoundError:
+        return None
+    except Exception:
+        log.exception("find_variant_by_label failed")
+        return None
+
+
 # ------------------------------------------------------------------ opponents
 def opponent_path(team_id):
     return os.path.join(root(), "opponents", safe_name(team_id) + ".json")
