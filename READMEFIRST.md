@@ -129,7 +129,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/interfaces.py` | contracts between modules: `GameProfile`, `Candidate`, `Decision`, `ChatLine`, `ChatContext`, `VariantSpec`, `Engine`, the generated-simulator contract, `FAMILIES` | real |
 | `bot/config.py` | all constants (deadlines, model, prices, limits) and `BOT_*` settings; `HARNESS_VERSION` | real |
 | `bot/ladder.py` | the fallback ladder L3 -> L2 -> L1; legal-action matching; `finalize` (filter + chat cleanup); watchdog `emergency` | real |
-| `Dockerfile` | the image: `python:3.12-slim`, copies `bot/`, starts the bot; logo line commented | real |
+| `Dockerfile` | the image: `python:3.12-slim`, copies `bot/` and `/logo.png`, starts the bot | real |
 | `.gitignore` | keeps secrets, `results/`, local memory, `participant-kit`, caches, editor folders out of Git | real |
 | `.dockerignore` | keeps secrets, `.git`, tests, docs, scripts, test games, the kit, results out of the image | real |
 | `RULES.md` | rules for every human and agent | real |
@@ -163,6 +163,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `scripts/batch_runner.py` | batch runner: plays N practice matches across games and opponents (random, self); prints ASCII metrics table (wins, warnings, timeouts, answer times, cost) | real |
 | `scripts/arena_lite.py` | runs any arena-lite command from the repository root and adds `testgames/` to its games, without editing the kit | real |
 | `scripts/keyinfo.py` | budget and spend of the dev key | real |
+| `logo.png` | square team logo (512x512 PNG) for the Docker image | real |
 | `tests/__init__.py` | sets `BOT_FAKE_LLM=1` for all tests | real |
 | `tests/session_script.py` | `BotProc` (bot as child process) and the scripted arena session, reused by `check_image.py` | real |
 | `tests/test_protocol.py` | session, cold start, garbage, warning, null legal actions, watchdog, model failure, closed stdin | real |
