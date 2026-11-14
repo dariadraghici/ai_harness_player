@@ -168,9 +168,13 @@ def _valid(action, ctx, grammar, legal=None, rejected=None):
         if not numbers or not (int(value_range[0]) <= int(numbers[-1]) <= int(value_range[1])):
             return False
     total = grammar.get("total")
+    numbers = [int(value) for value in re.findall(r"-?\d+", action)]
+    if grammar.get("field_count") is not None and len(numbers) != int(grammar["field_count"]):
+        return False
+    if any(value < 0 for value in numbers):
+        return False
     if total is not None:
-        numbers = [int(value) for value in re.findall(r"-?\d+", action)]
-        if len(numbers) >= 2 and sum(numbers) != int(total):
+        if numbers and sum(numbers) != int(total):
             return False
     return action
 

@@ -247,6 +247,10 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/engines/simultaneous_job.py` | Read the opponent as a sandbox job: payoff matrices for the current simultaneous step (exact when the step ends the game, else playouts with common random numbers), regret matching (RM+, linear averaging), opponent frequency model read from the history in the parsed state (orientation found by a probe), capped exploitation (weight at most 0.5) | real |
 | `bot/engines/bluff.py` | Bluff, parent side: payload, the draw of ONE action from the softmax probabilities (seeded, never from chat), candidates with EV and probability in the note. OFF by default (no local practice game of the family to measure) | real |
 | `bot/engines/bluff_job.py` | Bluff as a sandbox job: sample the hidden worlds by seeds, expected value per action by playouts against a random opponent and, in a share of the samples, one level smarter (it uses its own hidden card), common random numbers, softmax with a temperature tied to spread and noise | real |
+| `bot/policies/__init__.py` | policy registry and confidence router for specialized and generic policies | real |
+| `bot/policies/allocation.py` | defensive parser and deterministic majority-value troop allocation policy | real |
+| `bot/policies/generic.py` | grammar-first fallback policy for unknown variants | real |
+| `bot/policies/wordle.py` | registry adapter for the deterministic Wordle policy | real |
 
 ## Where things are stored at runtime
 
