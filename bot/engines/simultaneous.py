@@ -24,27 +24,22 @@ Nothing is read from bot/opponents.py (it stores no actions); see the hand-over.
 """
 
 import os
-import random
-import zlib
 
 from ..interfaces import Candidate
 from . import base
 
 # ---------------------------------------------------------------- constants (proposed for bot/config.py)
-MIN_PROB = 0.08              # an action with less probability in the final mix is not offered
-VALUE_STEP = 0.002           # value difference between consecutive candidates (all inside the margin)
 PRIOR_KEEP = 0.5             # weight of older games when a game ends
 JOB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "simultaneous_job.py")
 
 
-class SimultaneousEngine(base.SimEngine):
+class SimultaneousEngine(base.MixedEngine):
     family = "read_opponent"
     job_file = JOB_FILE
 
     def __init__(self):
         super().__init__()
         self._prior = {}                                  # (game_id, rules_hash) -> {action: weight}
-        self._salt = "%016x" % random.SystemRandom().getrandbits(64)
 
     def game_ended(self, key, game):
         counts = game.extra.get("counts")
@@ -60,18 +55,6 @@ class SimultaneousEngine(base.SimEngine):
     def payload(self, spec, turn_msg, game):
         return {"prior_counts": self._prior.get((spec.game_id, spec.rules_hash), {})}
 
-    def sample(self, spec, turn_msg, acts, probs):
-        """One action drawn from probs. Seeded from the salt, the game and the turn only."""
-        seed = zlib.crc32(("%s|%s|%s|%s|%s" % (self._salt, spec.game_id, spec.rules_hash,
-                                                turn_msg.get("game_index"), turn_msg.get("turn"))).encode("utf-8"))
-        rng = random.Random(seed)
-        x, acc = rng.random() * sum(probs), 0.0
-        for a, p in zip(acts, probs):
-            acc += p
-            if x < acc:
-                return a
-        return acts[-1]
-
     def build(self, res, spec, turn_msg, game):
         rows = res.get("actions") or []
         if not rows:
@@ -83,20 +66,14 @@ class SimultaneousEngine(base.SimEngine):
         acts = [r["action"] for r in rows]
         probs = [max(0.0, float(r["p_final"])) for r in rows]
         pick = self.sample(spec, turn_msg, acts, probs)
-        value = max(-1.0, min(1.0, float(res.get("value", 0.0))))
-        chosen = [r for r in rows if r["p_final"] >= MIN_PROB or r["action"] == pick]
-        chosen.sort(key=lambda r: (r["action"] != pick, -r["p_final"]))
+        value = float(res.get("value", 0.0))
         mix = ", ".join("%s %.0f%%" % (r["action"], 100 * r["p_final"]) for r in sorted(rows, key=lambda r: -r["p_final"])
                         if r["p_final"] >= 0.005)
         head = "mixed strategy (%s, value %.2f)%s: %s" % (
             "zero-sum" if res.get("zero_sum") else "not zero-sum", value,
             "" if not res.get("w") else ", exploiting their pattern with weight %.2f (best response %s, %d observed "
             "actions)" % (res["w"], res.get("br"), res.get("n_obs", 0)), mix)
-        out = []
-        for rank, r in enumerate(chosen):
-            note = head + ("; DRAWN for this turn" if r["action"] == pick else "; alternative with P=%.2f" % r["p_final"])
-            out.append(Candidate(r["action"], value - VALUE_STEP * rank, note))
-        return out
+        return self.mixed([{"action": r["action"], "p": r["p_final"]} for r in rows], pick, value, head)
 
 
 base.register(SimultaneousEngine())

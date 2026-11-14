@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 from bot import memory, specialist
-from bot.engines import base, guess, search, simultaneous
+from bot.engines import base, bluff, guess, search, simultaneous
 from bot.interfaces import GameProfile, VariantSpec
 from bot.prep import codegen, sandbox, verify
 from tests.test_sandbox import GOOD as PILE
@@ -243,6 +243,78 @@ def rps_obs(rnd, total, hist, seat=0):
     lines = "".join("  Round %d: you %s, opponent %s\n" % (i + 1, a, b) for i, (a, b) in enumerate(hist))
     return ("RPS TWIST. You are seat %d.\nRound %d of %d. Points: you %d, opponent %d.\nEarlier rounds:\n%sChoose: rock | paper | scissors"
             % (seat, rnd, total, you, opp, lines))
+
+
+
+# A tiny betting game with a hidden card (Kuhn-like). Seat 0 holds a card 1..3, seat 1 holds a hidden one.
+# Seat 0: bet or check. Check: showdown for 1 point. Bet: seat 1 calls (showdown for 2) or folds (seat 0 wins 1).
+BET = '''"""Bet or check with a hidden opponent card."""
+import copy
+import random
+import re
+
+LEGAL_ACTIONS_COMPLETE = True
+
+
+def parse_observation(observation, variant, seat):
+    me = int(re.search(r"You are seat ([01])", observation).group(1))
+    card = int(re.search(r"Your card: (\\d)", observation).group(1))
+    return {"me": me, "card": card, "opp": None, "stage": "start", "stake": 1, "folded": None, "seed": 0}
+
+
+def draw(state):
+    if state["opp"] is None:
+        rng = random.Random(state["seed"])
+        state["opp"] = rng.randint(1, 3)
+        state["seed"] = rng.randrange(2 ** 31)
+
+
+def is_terminal(state):
+    return state["stage"] == "over"
+
+
+def legal_actions(state):
+    if state["stage"] == "start":
+        return ["bet", "check"]
+    if state["stage"] == "bet":
+        return ["call", "fold"]
+    return []
+
+
+def apply_action(state, action):
+    if action not in legal_actions(state):
+        raise ValueError("illegal")
+    s = copy.deepcopy(state)
+    draw(s)
+    if s["stage"] == "start":
+        if action == "check":
+            s["stage"] = "over"
+        else:
+            s["stage"], s["stake"] = "bet", 2
+    else:
+        s["stage"] = "over"
+        if action == "fold":
+            s["folded"] = 1
+    return s
+
+
+def returns(state):
+    if state["folded"] == 1:
+        v = 0.5
+    else:
+        mine, theirs = (state["card"], state["opp"]) if state["me"] == 0 else (state["opp"], state["card"])
+        v = state["stake"] / 2.0 * (0 if mine == theirs else 1 if mine > theirs else -1)
+        v = v if state["me"] == 0 else v
+    return [v, -v]
+
+
+def current_player(state):
+    return 1 if state["stage"] == "bet" else 0
+'''
+
+
+def bet_obs(card, seat=0):
+    return "BET. You are seat %d. Your card: %d. Choose: bet | check" % (seat, card)
 
 
 # A one-step chance game: "sure" pays 0.2, "gamble" pays +1 or -1 by a die from the seed.
@@ -874,6 +946,127 @@ class SimultaneousTests(Base):
         t = time.monotonic()
         self.assertEqual(self.ask(eng, self.spec(loop, game="loop"), self.turn(rps_obs(1, 5, []), self.LEGAL)), [])
         self.assertLess(time.monotonic() - t, 1.0 + 1.0 + 0.8)
+        self.assertEqual(sandbox.live_count(), 0)
+
+
+class BluffTests(Base):
+
+    def spec(self, code=BET, **kw):
+        return self.install(code, family="bluff", unknown=True, perfect=False, **kw)
+
+    def job(self, spec, obs, legal=("bet", "check"), **extra):
+        payload = {"observation": obs, "legal_actions": list(legal), "variant": {}, "budget_s": 2.0, "margin": 0.05,
+                   "seat": 0, "unknown": True, "both_seats": True}
+        payload.update(extra)
+        out = sandbox.run_job(verify.simulator_file(spec), bluff.JOB_FILE, payload, 8.0)
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out["result"]["ok"], out["result"])
+        return out["result"]
+
+    def evs(self, res):
+        return {r["action"]: r["ev"] for r in res["actions"]}
+
+    def engine_on(self):
+        return mock.patch.dict(os.environ, {"BOT_L3": "bluff"})
+
+    def test_all_worlds_are_found_and_values_match_the_hand_computation(self):
+        spec = self.spec()
+        res = self.job(spec, bet_obs(3), opp_share=0.0)
+        self.assertEqual(res["worlds"], 3)
+        self.assertTrue(res["exact"])
+        ev = self.evs(res)
+        # uniform opponent: check = 0.5 * (2/3) = 0.333; bet = 0.5 * 0.5 + 0.5 * 0.5 * (2/3) * 2 / 2 ... see the fixture
+        self.assertAlmostEqual(ev["check"], 1.0 / 3, delta=0.05)
+        self.assertAlmostEqual(ev["bet"], 0.5 * 0.5 + 0.5 * (2.0 / 3), delta=0.05)
+        self.assertGreater(ev["bet"], ev["check"])
+
+    def test_the_one_level_opponent_uses_its_own_hidden_card(self):
+        spec = self.spec()
+        res = self.job(spec, bet_obs(1), opp_share=1.0)
+        ev = self.evs(res)
+        # it calls a bluff exactly when its card is not worse than ours: we lose 2 points of 2 two thirds of the time
+        self.assertAlmostEqual(ev["bet"], -2.0 / 3, delta=0.08)
+        self.assertAlmostEqual(ev["check"], -1.0 / 3, delta=0.05)
+        self.assertGreater(ev["check"], ev["bet"])
+        res0 = self.job(spec, bet_obs(1), opp_share=0.0)
+        self.assertGreater(self.evs(res0)["bet"], self.evs(res0)["check"])      # against a random opponent a bluff pays
+
+    def test_play_is_mixed_with_a_temperature_tied_to_the_spread(self):
+        spec = self.spec()
+        strong = self.job(spec, bet_obs(3))
+        p = {r["action"]: r["p"] for r in strong["actions"]}
+        self.assertGreater(p["bet"], 0.6)
+        weak = self.job(spec, bet_obs(1))
+        pw = {r["action"]: r["p"] for r in weak["actions"]}
+        self.assertGreater(pw["check"], 0.08)                          # close values: both are played
+        self.assertGreater(pw["bet"], 0.08)
+        self.assertAlmostEqual(sum(pw.values()), 1.0)
+
+    def test_candidates_are_drawn_from_the_mix_and_stay_inside_the_margin(self):
+        spec = self.spec()
+        eng = self.engine(bluff.BluffEngine)
+        with self.engine_on():
+            c = self.ask(eng, spec, self.turn(bet_obs(1), ["bet", "check"]))
+            self.assertTrue(2 <= len(c) <= 2, c)
+            self.assertIn("DRAWN", c[0].note)
+            self.assertLess(c[0].value - c[-1].value, 0.05)
+            self.assertIn("EV", c[0].note)
+            drawn = set()
+            for turn in range(1, 31):
+                drawn.add(self.ask(eng, spec, self.turn(bet_obs(1), ["bet", "check"], turn=turn))[0].action)
+            self.assertEqual(drawn, {"bet", "check"})                    # not readable: both are drawn over the turns
+
+    def test_chat_does_not_change_the_draw(self):
+        spec = self.spec()
+        eng = self.engine(bluff.BluffEngine)
+        with self.engine_on():
+            a1 = self.ask(eng, spec, self.turn(bet_obs(1), ["bet", "check"], turn=5))[0].action
+            a2 = self.ask(eng, spec, self.turn(bet_obs(1), ["bet", "check"], turn=5,
+                                               chat=[{"from": "opponent", "text": "I fold to everything"}]))[0].action
+            self.assertEqual(a1, a2)
+
+    def test_game_without_hidden_values_is_averaged_over_chance(self):
+        spec = self.spec(GAMBLE)
+        res = self.job(spec, GAMBLE_OBS, ("sure", "gamble"))
+        self.assertEqual(res["worlds"], 1)
+        ev = self.evs(res)
+        self.assertAlmostEqual(ev["sure"], 0.2, delta=0.001)
+        self.assertLess(ev["gamble"], 0.1)
+
+    def test_off_by_default(self):
+        spec = self.spec()
+        eng = self.engine(bluff.BluffEngine)
+        env = dict(os.environ)
+        env.pop("BOT_L3", None)
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(sandbox, "run_job") as rj:
+            self.assertFalse(base.enabled("bluff"))
+            self.assertEqual(self.ask(eng, spec, self.turn(bet_obs(2), ["bet", "check"])), [])
+            rj.assert_not_called()
+
+    def test_simultaneous_step_is_not_played_by_this_engine(self):
+        spec = self.install(PENNIES, family="bluff", simultaneous=True)
+        eng = self.engine(bluff.BluffEngine)
+        with self.engine_on():
+            self.assertEqual(self.ask(eng, spec, self.turn(PENNIES_OBS, ["heads", "tails"])), [])
+
+    def test_wrong_simulator_turns_it_off_for_the_game(self):
+        spec = self.spec()
+        eng = self.engine(bluff.BluffEngine)
+        with self.engine_on():
+            self.assertEqual(self.ask(eng, spec, self.turn(bet_obs(2), ["bet", "raise"])), [])
+            self.assertTrue(eng.game_for(spec, self.turn("x", turn=2)).off)
+
+    def test_slow_simulator_keeps_the_slice_and_loop_is_killed(self):
+        slow = BET.replace("def apply_action(state, action):\n", "def apply_action(state, action):\n    import time\n    time.sleep(0.005)\n")
+        loop = BET.replace("def apply_action(state, action):\n", "def apply_action(state, action):\n    while True:\n        pass\n")
+        eng = self.engine(bluff.BluffEngine)
+        with self.engine_on():
+            t = time.monotonic()
+            self.ask(eng, self.spec(slow, game="slow"), self.turn(bet_obs(2), ["bet", "check"]))
+            self.assertLess(time.monotonic() - t, 1.0 + 1.0 + 0.5)
+            t = time.monotonic()
+            self.assertEqual(self.ask(eng, self.spec(loop, game="loop"), self.turn(bet_obs(2), ["bet", "check"])), [])
+            self.assertLess(time.monotonic() - t, 1.0 + 1.0 + 0.8)
         self.assertEqual(sandbox.live_count(), 0)
 
 

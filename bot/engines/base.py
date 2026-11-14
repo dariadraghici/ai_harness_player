@@ -211,6 +211,52 @@ class SimEngine(BaseEngine):
         return cands
 
 
+class MixedEngine(SimEngine):
+    """Base of the engines that play a MIXED strategy (read_opponent, bluff).
+
+    A mixed strategy that always plays its most likely action is a pure strategy and can be read.
+    So the job returns probabilities and ONE action is drawn here, with a generator seeded from a
+    per-process secret salt, the game and the turn: never from the chat, not predictable by the
+    opponent. The drawn action is the top candidate; the other actions with at least MIN_PROB are
+    alternatives whose values stay inside the ladder's margin (the note carries the real numbers);
+    the model may pick another supported action and can use the chat to bluff about the move."""
+
+    MIN_PROB = 0.08              # an action with less probability is not offered (proposed for bot/config.py)
+    VALUE_STEP = 0.002           # value difference between consecutive candidates (all inside the margin)
+
+    def __init__(self):
+        super().__init__()
+        import random as _random
+        self._salt = "%016x" % _random.SystemRandom().getrandbits(64)
+
+    def sample(self, spec, turn_msg, acts, probs):
+        """One action drawn from probs."""
+        import random as _random
+        import zlib as _zlib
+        seed = _zlib.crc32(("%s|%s|%s|%s|%s" % (self._salt, spec.game_id, spec.rules_hash,
+                                                turn_msg.get("game_index"), turn_msg.get("turn"))).encode("utf-8"))
+        rng = _random.Random(seed)
+        x, acc = rng.random() * sum(probs), 0.0
+        for a, p in zip(acts, probs):
+            acc += p
+            if x < acc:
+                return a
+        return acts[-1]
+
+    def mixed(self, rows, pick, value, head):
+        """rows: [{"action", "p"}]. Returns the candidates: the drawn action first, then the supported ones."""
+        value = max(-1.0, min(1.0, float(value)))
+        chosen = [r for r in rows if r["p"] >= self.MIN_PROB or r["action"] == pick]
+        chosen.sort(key=lambda r: (r["action"] != pick, -r["p"]))
+        out = []
+        for rank, r in enumerate(chosen):
+            note = head + ("; DRAWN for this turn" if r["action"] == pick else "; alternative with P=%.2f" % r["p"])
+            if r.get("note"):
+                note += "; " + r["note"]
+            out.append(Candidate(r["action"], value - self.VALUE_STEP * rank, note))
+        return out
+
+
 # ---------------------------------------------------------------- facts from verify.json
 _FACTS: Dict[str, tuple] = {}
 
