@@ -1,0 +1,7 @@
+TASK: classify
+Game: {{GAME_NAME}} (variant label: {{LABEL}})
+
+RULES:
+{{RULES}}
+
+{{SAMPLE}}

@@ -1,0 +1,8 @@
+minimal
+Smallest possible state. Transcribe the rules directly into code, one rule after the other, with as few helper functions and as little state as possible. Clarity over speed.
+===
+parser-first
+Start from the sample observation. Write parse_observation first and make it read every line of the sample text with simple regular expressions; then build the rules on top of the parsed state. Keep the module short.
+===
+numbered-checks
+First list the rules as numbered checks R1, R2, ... in the module docstring (who moves, what is legal, what changes, when it ends, who wins). Then write the code so that each check is implemented in a line or block carrying a comment with its number.

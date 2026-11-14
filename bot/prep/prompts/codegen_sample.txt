@@ -1,0 +1,6 @@
+SAMPLE TURN (seat 0): this is the first test your code will face. It is ONE deal of many: the module is tested later on other deals and positions of the same variant (other heaps, cards, secrets, scores, both seats), so nothing of this sample may be hard-coded. parse_observation must accept exactly this observation text (between the markers), and legal_actions of the resulting state must equal the list below exactly, same strings, same order.
+observation:
+<<<OBSERVATION
+{{OBSERVATION}}
+OBSERVATION>>>
+legal_actions: {{LEGAL}}

@@ -1,0 +1,1 @@
+SAMPLE TURN: none is available. The module is tested later on many deals and positions of this variant, for both seats. Infer the observation format from the rules and parse it defensively; when the arena lists legal actions it uses the exact action format of the rules.

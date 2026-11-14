@@ -1,0 +1,14 @@
+TASK: codegen
+Working brief for this candidate: {{BRIEF}}
+
+GAME: {{GAME_NAME}} (variant label: {{LABEL}})
+
+RULES (complete; variant parameters come from here; a setup shown here is only a SAMPLE deal, see C1):
+{{RULES}}
+
+WHAT PREP ALREADY KNOWS ABOUT THIS GAME (checked by code, may still be imperfect):
+{{FACTS}}
+
+{{SAMPLE}}
+
+Write the complete module now, in ONE fenced python block.

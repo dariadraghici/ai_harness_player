@@ -159,6 +159,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `scripts/push.py` | refuses dirty tree or mismatched image; Harbor login via stdin; push; digest; tag reminder | real |
 | `scripts/check_image.py` | automated pre-push checklist (platform, silent start, scripted session, practice match with prep on arena-lite, no secrets in image) | real |
 | `scripts/practice.py` | practice match on the organizers' arena-lite with `dev.env` (`--fake`, `--debug`, `--prep`, `--image`, `--opponent random/self/starter`); checks the replay and our logs and prints `RESULT: CLEAN` or the problems | real |
+| `scripts/batch_runner.py` | batch runner: plays N practice matches across games and opponents (random, self); prints ASCII metrics table (wins, warnings, timeouts, answer times, cost) | real |
 | `scripts/arena_lite.py` | runs any arena-lite command from the repository root and adds `testgames/` to its games, without editing the kit | real |
 | `scripts/keyinfo.py` | budget and spend of the dev key | real |
 | `tests/__init__.py` | sets `BOT_FAKE_LLM=1` for all tests | real |
@@ -166,6 +167,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `tests/test_protocol.py` | session, cold start, garbage, warning, null legal actions, watchdog, model failure, closed stdin | real |
 | `tests/test_units.py` | memory, ladder, JSON parsing, chat cleanup, defense block, clock proportions | real |
 | `tests/test_kit.py` | kit message shapes (example action from kit rules, specialist found by label, variant settings in the prompt) and five fake-LLM matches on arena-lite that must be CLEAN (skipped without the kit) | real |
+| `tests/test_batch_runner.py` | unit tests for batch runner: CLI argument parsing, replay parsing, metric aggregation, ASCII table formatting | real |
 | `testgames/nim_deal.py` | our own test game for arena-lite: Think ahead, Nim whose dealt heaps are written into the rules text, so the rules of `prep` and `start` differ (kit note K2); the check that prep work is reused for a new deal | real |
 | `testgames/rps_twist.py` | our own test game for arena-lite (`arena.core.Game` subclass): Read the opponent, simultaneous moves, payoff twist. New test games go here, in the same form | real |
 
@@ -191,9 +193,20 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | Path | What it is / what it is for | Status |
 |---|---|---|
 | `bot/prep/__init__.py` | package marker | real |
-| `bot/prep/pipeline.py` | prep under the time budget: variants in parallel, cache lookup, extension points | basic |
-| `bot/prep/classify.py` | family + profile + playbook with one model call; `example_from_rules` heuristic | basic |
-| `bot/prep/codegen.py` | simulator generation and repair by the model | stub |
+| `bot/prep/pipeline.py` | prep under the time budget: phase A (classify variants in parallel, cache lookup), family alignment across variants; phase B (simulator candidates for the variants worth it, done at about 45 percent of the prep clock); extension point for verification | real |
+| `bot/prep/classify.py` | profile: code evidence (family signals, format sentences, quoted examples, sample facts) + one model call + field checks + at most one repair call; `analysis.json`; `align_families`; `call_model` (deadline-checked, capped prep model calls) | real |
+| `bot/prep/templates.py` | loader of the prep prompt templates in `bot/prep/prompts/` | real |
+| `bot/prep/prompts/classify_system.txt` | system prompt of the classify call (fields and what each is used for) | real |
+| `bot/prep/prompts/classify_user.txt` | user message of the classify call (starts with `TASK: classify`) | real |
+| `bot/prep/prompts/classify_repair.txt` | follow-up message of the one repair call (the complaints found by code) | real |
+| `bot/prep/prompts/codegen_contract.txt` | THE simulator contract C1-C10 (variant parameters vs deal setup, seat, information state, simultaneous steps, legal actions, returns, purity, JSON state, errors), used by generation and repair | real |
+| `bot/prep/prompts/codegen_system.txt` | system prompt of codegen: role, contract, code rules (import allowlist, forbidden names), output format | real |
+| `bot/prep/prompts/codegen_user.txt` | user message of one codegen call (starts with `TASK: codegen`): brief, rules, prep facts, sample turn | real |
+| `bot/prep/prompts/codegen_sample.txt`, `codegen_nosample.txt` | the sample-turn block of the codegen prompts (with and without a sample turn) | real |
+| `bot/prep/prompts/codegen_repair.txt` | user message of a repair call (`TASK: codegen-repair`): failures + current module | real |
+| `bot/prep/prompts/codegen_briefs.txt` | the working briefs that make parallel candidates differ (minimal, parser-first, numbered-checks) | real |
+| `tests/test_prep.py` | prep unit tests (mocked model): evidence, field checks, repair, playbook cap, alignment, analysis.json; code extraction, static check, generation + manifest + repair, deadlines, phase B, cold path without codegen | real |
+| `bot/prep/codegen.py` | simulator generation: parallel candidates with different briefs, code extraction, static `ast` check (never executes code), files + manifest `candidates/index.json`, one repair round, `repair_simulator` | real |
 | `bot/prep/verify.py` | simulator tests against sample turns, `VerifyReport` | stub |
 | `bot/prep/sandbox.py` | generated code in a killable child process | stub |
 | `bot/specialist.py` | per-variant registry: process -> memory -> same variant label (`lookup_by_label`) -> cold prep; `build_variant` (extension point) | real |
