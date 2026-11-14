@@ -26,8 +26,10 @@ being right).
 import os
 import re
 
+from .. import log
 from ..interfaces import Candidate
 from . import base
+from . import wordle
 
 JOB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guess_job.py")
 
@@ -58,6 +60,15 @@ class GuessEngine(base.SimEngine):
     family = "guessing"
     job_file = JOB_FILE
     splittable = True
+
+    def candidates(self, specialist, turn_msg, deadline):
+        """Use deterministic Wordle deduction when the rules describe word feedback."""
+        try:
+            if wordle.is_wordle_rules(getattr(specialist, "rules", "")):
+                return wordle.candidates(specialist, turn_msg, deadline)
+        except Exception:
+            log.exception("word solver failed; using verified guessing simulator")
+        return super().candidates(specialist, turn_msg, deadline)
 
     def merge(self, results, payload):
         """Every part sampled the same hypotheses and scored its share of the actions: pool the scored actions,

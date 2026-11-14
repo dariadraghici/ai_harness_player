@@ -10,6 +10,7 @@ import time
 
 from . import config, log, memory, protocol
 from .engines import guardrails
+from .engines import wordle
 from .prep import classify
 
 _BLACKLIST = {}
@@ -152,6 +153,10 @@ def _valid(action, ctx, grammar, legal=None, rejected=None):
             return False
         dictionary = grammar.get("dictionary") or []
         if dictionary and words[-1].casefold() not in dictionary:
+            return False
+        spec = ctx.get("spec")
+        if wordle.is_wordle_rules(getattr(spec, "rules", "")) \
+                and not wordle.allowed_word(words[-1], int(length)):
             return False
         observation = str((ctx.get("turn") or {}).get("observation") or "")
         if re.search(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(action.casefold()),
