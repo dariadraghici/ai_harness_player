@@ -33,6 +33,16 @@ _key = {
 }
 # Per-key usage: key suffix -> counters. Never store or log the full key.
 _usage = {}
+# Most recent call stats for metrics recording.
+_last_call = {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0,
+    "cached_tokens": 0,
+    "cost": 0.0,
+    "tag": "",
+    "failed": False,
+}
 
 
 def _key_id(api_key):
@@ -68,25 +78,56 @@ def usage(key_id=None):
                                          "output": 0, "cached": 0, "cost": 0.0}))
 
 
-def _account(kid, u, failed=False):
+def last_call():
+    """Return token breakdown and cost of the most recent model call."""
+    with _lock:
+        return dict(_last_call)
+
+
+def pop_last_call():
+    """Return token breakdown and cost of the most recent call, then reset."""
+    with _lock:
+        res = dict(_last_call)
+        _last_call.update({
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cached_tokens": 0,
+            "cost": 0.0,
+            "tag": "",
+            "failed": False,
+        })
+        return res
+
+
+def _account(kid, u, failed=False, tag=""):
     with _lock:
         c = _usage.setdefault(kid, {"calls": 0, "failures": 0, "input": 0,
                                     "output": 0, "cached": 0, "cost": 0.0})
         c["calls"] += 1
         if failed:
             c["failures"] += 1
-        if not u:
-            return
-        prompt = int(u.get("prompt_tokens") or 0)
-        out = int(u.get("completion_tokens") or 0)
+        prompt = int(u.get("prompt_tokens") or 0) if u else 0
+        out = int(u.get("completion_tokens") or 0) if u else 0
         cached = int(u.get("cache_read_input_tokens") or
-                     (u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
-        c["input"] += prompt
-        c["output"] += out
-        c["cached"] += cached
-        c["cost"] += (max(prompt - cached, 0) * config.PRICE_INPUT_PER_TOKEN
-                      + cached * config.PRICE_CACHE_READ_PER_TOKEN
-                      + out * config.PRICE_OUTPUT_PER_TOKEN)
+                     (u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0) if u else 0
+        total = prompt + out
+        cost = (max(prompt - cached, 0) * config.PRICE_INPUT_PER_TOKEN
+                + cached * config.PRICE_CACHE_READ_PER_TOKEN
+                + out * config.PRICE_OUTPUT_PER_TOKEN)
+        if u:
+            c["input"] += prompt
+            c["output"] += out
+            c["cached"] += cached
+            c["cost"] += cost
+
+        _last_call["prompt_tokens"] = prompt
+        _last_call["completion_tokens"] = out
+        _last_call["total_tokens"] = total
+        _last_call["cached_tokens"] = cached
+        _last_call["cost"] = cost
+        _last_call["tag"] = str(tag or "")
+        _last_call["failed"] = bool(failed)
 
 
 def complete(messages, max_tokens=300, timeout=8.0, thinking_budget=None, tag="call"):
@@ -156,11 +197,11 @@ def _complete(messages, max_tokens, timeout, thinking_budget, tag):
     dt = time.monotonic() - t0
     if th.is_alive():
         log.warning("llm %s timed out after %.1fs" % (tag, dt))
-        _account(kid, None, failed=True)
+        _account(kid, None, failed=True, tag=tag)
         return None
     if "error" in box:
         log.warning("llm %s failed after %.1fs: %s" % (tag, dt, box["error"]))
-        _account(kid, None, failed=True)
+        _account(kid, None, failed=True, tag=tag)
         return None
     data = box.get("data") or {}
     u = data.get("usage") or {}
@@ -173,7 +214,7 @@ def _complete(messages, max_tokens, timeout, thinking_budget, tag):
         finish = choice.get("finish_reason")
     except Exception:
         finish = "?"
-    _account(kid, u, failed=not text)
+    _account(kid, u, failed=not text, tag=tag)
     log.info("llm %s %.1fs in=%s out=%s finish=%s" % (
         tag, dt, u.get("prompt_tokens"), u.get("completion_tokens"), finish))
     if not text or not str(text).strip():
@@ -189,10 +230,10 @@ def _fake(messages, tag, kid, timeout):
         time.sleep(config.FAKE_LLM_DELAY_S)   # deliberately ignores the timeout
         return None
     if mode == "fail":
-        _account(kid, None, failed=True)
+        _account(kid, None, failed=True, tag=tag)
         log.warning("llm %s fake failure" % tag)
         return None
-    _account(kid, {"prompt_tokens": 100, "completion_tokens": 20})
+    _account(kid, {"prompt_tokens": 100, "completion_tokens": 20}, tag=tag)
     text = "\n".join(str(m.get("content", "")) for m in messages)
     if "TASK: classify" in text:
         from .prep.classify import example_from_rules

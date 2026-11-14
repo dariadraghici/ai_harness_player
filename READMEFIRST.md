@@ -153,11 +153,11 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/log.py` | logging to stderr (`BOT_LOG_LEVEL`: debug, info, warning, error) | real |
 | `bot/llm.py` | gateway client (stdlib urllib): `set_key`, `complete` (thinking control, hard timeout, never raises), usage and cost per key, fake mode | real |
 | `bot/memory.py` | `/memory` store: root with fallback, rules hash, atomic writes, variant save/load with harness version check, `find_variant_by_label`, paths | real |
-| `bot/metrics.py` | one JSON line per answer and per game end to `<memory>/metrics/<container>.jsonl` | basic |
+| `bot/metrics.py` | one JSON line per decision (game, level, time, tokens, cost, why) to `<memory>/metrics/<container>.jsonl` | real |
 | `scripts/_common.py` | shared helpers: image name, secrets parsing (no shell `source`), git checks, where arena-lite is (`BOT_ARENA_LITE` or `participant-kit/arena-lite`) | real |
 | `scripts/build.py` | `docker build --platform linux/amd64`, labels the image with the Git commit | real |
 | `scripts/push.py` | refuses dirty tree or mismatched image; Harbor login via stdin; push; digest; tag reminder | real |
-| `scripts/check_image.py` | automated pre-push checklist (platform, silent start, scripted session, practice match with prep on arena-lite, no secrets in image) | real |
+| `scripts/check_image.py` | automated pre-push checklist strictly validating ARENA-CONTRACT 2.9 (all 12 contract checks) | real |
 | `scripts/practice.py` | practice match on the organizers' arena-lite with `dev.env` (`--fake`, `--debug`, `--prep`, `--image`, `--opponent random/self/starter`); checks the replay and our logs and prints `RESULT: CLEAN` or the problems | real |
 | `scripts/batch_runner.py` | batch runner: plays N practice matches across games and opponents (random, self); prints ASCII metrics table (wins, warnings, timeouts, answer times, cost) | real |
 | `scripts/arena_lite.py` | runs any arena-lite command from the repository root and adds `testgames/` to its games, without editing the kit | real |
@@ -168,6 +168,8 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `tests/test_units.py` | memory, ladder, JSON parsing, chat cleanup, defense block, clock proportions | real |
 | `tests/test_kit.py` | kit message shapes (example action from kit rules, specialist found by label, variant settings in the prompt) and five fake-LLM matches on arena-lite that must be CLEAN (skipped without the kit) | real |
 | `tests/test_batch_runner.py` | unit tests for batch runner: CLI argument parsing, replay parsing, metric aggregation, ASCII table formatting | real |
+| `tests/test_metrics.py` | unit tests for extended metrics logging: per-call tokens, cost calculation, decision recording | real |
+| `tests/test_check_image.py` | unit tests for pre-push checklist functions and ARENA-CONTRACT 2.9 validation | real |
 | `testgames/nim_deal.py` | our own test game for arena-lite: Think ahead, Nim whose dealt heaps are written into the rules text, so the rules of `prep` and `start` differ (kit note K2); the check that prep work is reused for a new deal | real |
 | `testgames/rps_twist.py` | our own test game for arena-lite (`arena.core.Game` subclass): Read the opponent, simultaneous moves, payoff twist. New test games go here, in the same form | real |
 
