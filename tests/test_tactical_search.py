@@ -31,7 +31,8 @@ class GravityConnect:
             raise ValueError("illegal action")
         column = int(action.split()[1])
         out = {"board": [row[:] for row in state["board"]],
-               "mover": 1 - state["mover"], "me": state["me"]}
+               "mover": 1 - state["mover"], "me": state["me"],
+               "connect": state.get("connect", 3)}
         token = "X" if state["mover"] == 0 else "O"
         for row in range(len(out["board"])):
             if out["board"][row][column] == ".":
@@ -42,7 +43,7 @@ class GravityConnect:
     def _winner(self, state):
         board = state["board"]
         height, width = len(board), len(board[0])
-        connect = 3
+        connect = state.get("connect", 3)
         for row in range(height):
             for col in range(width):
                 for dr, dc in ((0, 1), (1, 0), (1, 1), (1, -1)):
@@ -66,13 +67,13 @@ class GravityConnect:
 SIM = GravityConnect()
 
 
-def run(board, mover=0, legal=None, budget=0.2):
+def run(board, mover=0, legal=None, budget=0.2, connect=3):
     if legal is None:
         width = len(board[0])
         legal = ["drop %d" % c for c in range(width)
                  if any(row[c] == "." for row in board)]
     return search_job.run(SIM, {
-        "observation": json.dumps({"board": board, "mover": mover}),
+        "observation": json.dumps({"board": board, "mover": mover, "connect": connect}),
         "legal_actions": legal,
         "variant": {},
         "seat": 0,
@@ -136,6 +137,40 @@ class TacticalSearchTests(unittest.TestCase):
         ], budget=0.01)
         self.assertLess(time.monotonic() - started, 0.5)
         self.assertTrue(result.get("ok"))
+
+    def test_variant_sizes_keep_immediate_win_priority(self):
+        for width, height, connect in ((7, 6, 4), (7, 9, 5), (9, 7, 5)):
+            board = [["."] * width for _ in range(height)]
+            board[0][:connect - 1] = ["X"] * (connect - 1)
+            result = run(board, connect=connect)
+            self.assertEqual(result["actions"][0]["action"], "drop %d" % (connect - 1))
+            self.assertEqual(result["actions"][0]["value"], 1.0)
+
+    def test_exact_endgame_matches_bruteforce_reference(self):
+        state = {
+            "board": [
+                ["X", "X", "O"],
+                ["X", ".", "O"],
+                ["O", ".", "."],
+            ],
+            "mover": 0,
+            "me": 0,
+            "connect": 3,
+        }
+
+        def solve(position):
+            if SIM.is_terminal(position):
+                return SIM.returns(position)[0]
+            values = [solve(SIM.apply_action(position, action))
+                      for action in SIM.legal_actions(position)]
+            return max(values) if position["mover"] == 0 else min(values)
+
+        expected = solve(state)
+        result = run(state["board"], mover=state["mover"], connect=3)
+        values = {row["action"]: row["value"] for row in result["actions"]}
+        self.assertTrue(result.get("solved") or result["algo"] == "exact-timeout")
+        if result.get("solved"):
+            self.assertEqual(max(values.values()), expected)
 
 
 if __name__ == "__main__":
