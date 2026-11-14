@@ -289,7 +289,7 @@ class BaseTests(Base):
         # a new game (new game_index) starts clean
         c = self.ask(eng, spec, self.turn(PILE_OBS % 7, ["take 1", "take 2", "take 3"], game_index=2, turn=1))
         self.assertTrue(c)
-        live = base.read_live(spec)
+        live = verify.read_live(spec)
         self.assertEqual((live.get("failed_games"), live.get("ok_games")), (1, 1))
 
     def test_seat_unknown_and_not_in_the_observation_means_off(self):
@@ -314,9 +314,9 @@ class BaseTests(Base):
     def test_variant_with_failing_live_checks_is_switched_off_for_everybody(self):
         spec = self.install(PILE)
         sh = base.sim_sha(spec)
-        for _ in range(base.LIVE_FAIL_LIMIT):
-            base.note_live(spec, False, sh)
-        self.assertTrue(base.live_disabled(spec, sh))
+        for _ in range(verify.LIVE_FAIL_LIMIT):
+            verify.note_live(spec, False, sh)
+        self.assertTrue(verify.live_disabled(spec, sh))
         eng = self.engine(search.SearchEngine)
         with mock.patch.object(sandbox, "run_job") as rj:
             self.assertEqual(self.ask(eng, spec, self.turn(PILE_OBS % 7)), [])
@@ -324,11 +324,11 @@ class BaseTests(Base):
         # games that went well keep a variant in use
         spec2 = self.install(PILE, game="g2")
         sh2 = base.sim_sha(spec2)
-        for _ in range(base.LIVE_FAIL_LIMIT):
-            base.note_live(spec2, False, sh2)
+        for _ in range(verify.LIVE_FAIL_LIMIT):
+            verify.note_live(spec2, False, sh2)
         for _ in range(10):
-            base.note_live(spec2, True, sh2)
-        self.assertFalse(base.live_disabled(spec2, sh2))
+            verify.note_live(spec2, True, sh2)
+        self.assertFalse(verify.live_disabled(spec2, sh2))
 
     def test_simulator_that_raises_switches_off(self):
         spec = self.install(RAISES_IN_APPLY)
@@ -501,6 +501,78 @@ class SearchTests(Base):
         with mock.patch.object(ladder.decide_mod, "decide", return_value=None):
             d = ladder.decide_turn(spec, {"seat": 0}, msg, time.monotonic() + 12.0)
         self.assertEqual((d.action, d.level), ("take 3", 3))
+
+
+class CacheCheckTests(Base):
+    """Item 11: a spec that comes from /memory or from the label lookup is checked against the files."""
+
+    RULES = "rules of gstd"
+
+    def saved(self, claim_path="/other/container/memory/g/x/simulator.py", **kw):
+        spec = self.install(PILE, **kw)
+        spec.simulator_path, spec.verified = claim_path, True            # what meta.json of another container says
+        memory.save_variant(spec)
+        specialist._registry.clear()
+        return spec
+
+    def test_right_simulator_sets_the_local_path(self):
+        spec = self.saved()
+        got = specialist.lookup("g", self.RULES)
+        self.assertTrue(got.verified)
+        self.assertEqual(got.simulator_path, verify.simulator_file(spec))
+
+    def test_changed_simulator_clears_verified(self):
+        spec = self.saved()
+        memory.write_text_atomic(verify.simulator_file(spec), PILE + "\n# somebody changed me\n")
+        got = specialist.lookup("g", self.RULES)
+        self.assertFalse(got.verified)
+        self.assertIsNone(got.simulator_path)
+
+    def test_missing_simulator_clears_verified(self):
+        spec = self.saved()
+        os.remove(verify.simulator_file(spec))
+        got = specialist.lookup("g", self.RULES)
+        self.assertEqual((got.verified, got.simulator_path), (False, None))
+
+    def test_verify_json_of_another_harness_version_clears_verified(self):
+        spec = self.saved()
+        d = memory.read_json(verify.verify_file(spec))
+        d["harness_version"] = "0.0.0-old"
+        memory.write_json_atomic(verify.verify_file(spec), d)
+        self.assertFalse(specialist.lookup("g", self.RULES).verified)
+
+    def test_label_lookup_gets_the_local_path_too(self):
+        spec = self.saved()
+        got = specialist.lookup_by_label("g", "std", "rules text of another deal")
+        self.assertEqual(got.source, "label")
+        self.assertTrue(got.verified)
+        self.assertEqual(got.simulator_path, verify.simulator_file(spec))
+
+    def test_for_start_goes_through_the_check_and_records_the_seat(self):
+        spec = self.saved()
+        got = specialist.for_start({"game_id": "g", "rules": self.RULES, "variant": {"label": "std"}, "seat": 1},
+                                   time.monotonic() + 20)
+        self.assertEqual((got.verified, got.seat), (True, 1))
+        self.assertEqual(got.simulator_path, verify.simulator_file(spec))
+
+    def test_checked_once_per_spec_and_never_with_a_child(self):
+        self.saved()
+        with mock.patch.object(verify, "is_done", wraps=verify.is_done) as isd, \
+                mock.patch.object(sandbox, "Worker") as w, mock.patch.object(sandbox, "run_job") as rj:
+            specialist.lookup("g", self.RULES)
+            specialist.lookup("g", self.RULES)
+            specialist.lookup("g", self.RULES)
+            self.assertEqual(isd.call_count, 1)
+            w.assert_not_called()
+            rj.assert_not_called()
+        self.assertEqual(sandbox.live_count(), 0)
+
+    def test_variant_condemned_by_the_live_check_is_not_verified_at_load(self):
+        spec = self.saved()
+        sh = base.sim_sha(spec)
+        for _ in range(verify.LIVE_FAIL_LIMIT):
+            verify.note_live(spec, False, sh)
+        self.assertFalse(specialist.lookup("g", self.RULES).verified)
 
 
 if __name__ == "__main__":

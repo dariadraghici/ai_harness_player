@@ -18,8 +18,9 @@ order, and NEVER raises:
      "whatever is left"); the first thing every job does is the LIVE CHECK: parse
      THIS turn's observation and compare the legal actions with the arena's list;
   4. a failed live check switches the engine off for the rest of this game and is
-     counted per variant in <variant_dir>/live.json, so that a simulator that keeps
-     failing stops being used by all our containers (verify.is_done reads it);
+     counted per variant in <variant_dir>/live.json (prep/verify.py note_live), so that
+     a simulator that keeps failing stops being used by all our containers
+     (verify.is_done reads it);
   5. the job's answer becomes list[Candidate].
 
 No child is alive after candidates() returns. Opponent chat, and anything
@@ -41,9 +42,7 @@ SLICE_MIN_S = 0.4                # below this the engine does not start
 SLICE_BACKSTOP_S = 1.5           # the parent kills the child this long after the slice
 L3_DEFAULT = "think_ahead"       # families on by default when BOT_L3 is not set (decided by measurement)
 L3_ALL = ("think_ahead", "guessing", "read_opponent", "bluff")
-LIVE_FAIL_LIMIT = 3              # games with a failed live check before a variant is switched off
 JOB_ERRORS_OFF = 2               # simulator exceptions in jobs before "off for this game"
-LIVE_FILE = "live.json"
 
 
 class NotAvailable(Exception):
@@ -68,41 +67,6 @@ class BaseEngine:
 
     def candidates(self, specialist: VariantSpec, turn_msg: dict, deadline: float) -> List[Candidate]:
         raise NotImplementedError("%s engine not implemented" % self.family)
-
-
-# ---------------------------------------------------------------- live statistics per variant
-def live_file(spec):
-    return os.path.join(memory.variant_dir(spec.game_id, spec.rules_hash), LIVE_FILE)
-
-
-def read_live(spec):
-    d = memory.read_json(live_file(spec), {})
-    return d if isinstance(d, dict) else {}
-
-
-def note_live(spec, ok, sha=""):
-    """Count one game: live check passed or failed. Atomic write; a lost update is harmless."""
-    try:
-        d = read_live(spec)
-        if sha and d.get("sha") != sha:
-            d = {"sha": sha}
-        key = "ok_games" if ok else "failed_games"
-        d[key] = int(d.get(key, 0)) + 1
-        memory.write_json_atomic(live_file(spec), d)
-    except Exception:
-        log.exception("note_live failed")
-
-
-def live_disabled(spec, sha=""):
-    """True when the live check failed in several games and in at least a third of the games played."""
-    try:
-        d = read_live(spec)
-        if sha and d.get("sha") not in (None, "", sha):
-            return False            # another simulator since: the counters belong to the old one
-        failed, ok = int(d.get("failed_games", 0)), int(d.get("ok_games", 0))
-        return failed >= LIVE_FAIL_LIMIT and failed * 3 >= failed + ok
-    except Exception:
-        return False
 
 
 # ---------------------------------------------------------------- the helper
@@ -164,7 +128,8 @@ class SimEngine(BaseEngine):
         if game.counted:
             return
         game.counted = True
-        note_live(spec, ok, sim_sha(spec))
+        from ..prep import verify
+        verify.note_live(spec, ok, sim_sha(spec))
 
     # ---- the one entry point
     def candidates(self, specialist, turn_msg, deadline):
@@ -176,7 +141,7 @@ class SimEngine(BaseEngine):
             return []
 
     def _candidates(self, spec, turn_msg, deadline, t0):
-        from ..prep import sandbox, verify          # late: keeps `import bot.engines` light
+        from ..prep import sandbox, verify          # late: prep imports chat, which imports the engines
         if not enabled(self.family):
             return []
         if spec is None or not spec.verified:
@@ -188,7 +153,7 @@ class SimEngine(BaseEngine):
         game = self.game_for(spec, turn_msg)
         if game.off:
             return []
-        if live_disabled(spec, sim_sha(spec)):
+        if verify.live_disabled(spec, sim_sha(spec)):
             game.off, game.reason = True, "switched off for this variant (live check failed in several games)"
             log.warning("%s engine: %s" % (self.family, game.reason))
             return []

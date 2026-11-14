@@ -67,6 +67,8 @@ STORED_TURNS_MAX = 40            # stored real turns used per variant
 JOB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify_job.py")
 SIMULATOR_FILE = "simulator.py"
 VERIFY_FILE = "verify.json"
+LIVE_FILE = "live.json"
+LIVE_FAIL_LIMIT = 3              # games with a failed live check before a variant is switched off
 OWN_CHECKS = ("load", "parse", "legal", "contract", "selfplay")
 LIMITS = [
     "one prep sample turn (seat 0) per variant: a module that hard-codes that deal or only parses "
@@ -435,10 +437,50 @@ def _read(path):
         return None
 
 
-def is_done(spec):
-    """True when verify.json of this harness version and contract names a winner that is on disk.
+def live_file(spec):
+    """Counters of the live check of the engines (bot/engines/base.py), next to verify.json."""
+    return os.path.join(memory.variant_dir(spec.game_id, spec.rules_hash), LIVE_FILE)
 
-    Sets spec.simulator_path and spec.verified accordingly (a stale claim in meta.json is undone)."""
+
+def read_live(spec):
+    d = memory.read_json(live_file(spec), {})
+    return d if isinstance(d, dict) else {}
+
+
+def note_live(spec, ok, sha=""):
+    """Count one game in which the live check of the engines passed or failed. Counters belong to one
+    simulator (its sha); another simulator starts from zero. Atomic write; a lost update is harmless."""
+    try:
+        d = read_live(spec)
+        if sha and d.get("sha") != sha:
+            d = {"sha": sha}
+        key = "ok_games" if ok else "failed_games"
+        d[key] = int(d.get(key, 0)) + 1
+        memory.write_json_atomic(live_file(spec), d)
+    except Exception:
+        log.exception("note_live failed")
+
+
+def live_disabled(spec, sha=""):
+    """True when the live check failed in several games and in at least a third of the games played:
+    every container of ours then stops using this variant's simulator."""
+    try:
+        d = read_live(spec)
+        if sha and d.get("sha") not in (None, "", sha):
+            return False            # another simulator since: the counters belong to the old one
+        failed, ok = int(d.get("failed_games", 0)), int(d.get("ok_games", 0))
+        return failed >= LIVE_FAIL_LIMIT and failed * 3 >= failed + ok
+    except Exception:
+        return False
+
+
+def is_done(spec):
+    """True when verify.json of this harness version and contract names a winner that is on disk,
+    the file is that winner (its hash) and the live check has not condemned it in several games.
+
+    Sets spec.simulator_path (THIS container's path to the file) and spec.verified accordingly: a stale
+    claim in meta.json, or an absolute path from the container that did the prep, is corrected. No child
+    is started."""
     try:
         v = memory.read_json(verify_file(spec))
         path = simulator_file(spec)
@@ -447,8 +489,12 @@ def is_done(spec):
                 and isinstance(v.get("winner"), dict)):
             code = _read(path)
             if code is not None and _sha(code) == v["winner"].get("sha256"):
-                spec.simulator_path, spec.verified = path, True
-                return True
+                if live_disabled(spec, v["winner"].get("sha256")):
+                    log.warning("simulator of %s/%s is switched off: the live check failed in several games" % (
+                        spec.game_id, spec.rules_hash))
+                else:
+                    spec.simulator_path, spec.verified = path, True
+                    return True
         if spec.verified or spec.simulator_path:
             spec.simulator_path, spec.verified = None, False
         return False
