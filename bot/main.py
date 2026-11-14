@@ -31,7 +31,7 @@ def run():
 
     from . import clock, config, ladder, llm, log, memory, metrics, opponents, resources, specialist
     from .engines import base as engines_base
-    from .chat import decide, defense
+    from .chat import decide, defense, influence
     from .engines.bg_compute import BackgroundCompute
     from .interfaces import VariantSpec
     from .prep import pipeline
@@ -104,6 +104,9 @@ def run():
                                warning=bool(req.msg.get("warning")), llm=llm.usage(),
                                **metrics.perf_fields(getattr(req, "perf0", None), getattr(req, "timing", None),
                                                      dict(engines_base.LAST_RUN) if req.type == "turn" else None))
+                if req.type == "turn" and isinstance(obj, dict):
+                    influence.on_sent(info.get("goal"), self.spec, self.start_msg, req.msg,
+                                      obj.get("action"), obj.get("chat"))       # logs the attempt, queues its score
                 if req.type == "prep" and not by_watchdog:
                     self.background.start(specialist.all_specs())
                 elif req.type in ("start", "turn") and not by_watchdog:
@@ -174,11 +177,11 @@ def run():
 
             def progress(d):
                 req.set_best(protocol.action(d.action, d.chat))
-                req.info = {"level": d.level, "why": d.why}
+                req.info = {"level": d.level, "why": d.why, "goal": d.goal}
 
             def work(r):
                 d = ladder.decide_turn(spec, start_msg, msg, r.deadline, progress, self.move_seconds, r.timing)
-                r.info = {"level": d.level, "why": d.why}
+                r.info = {"level": d.level, "why": d.why, "goal": d.goal}
                 r.result = protocol.action(d.action, d.chat)
             self.spawn(req, work)
 
@@ -188,6 +191,7 @@ def run():
                 msg.get("match_score"), msg.get("match_over")))
             sm = self.start_msg or {}
             opponents.record_game_end(sm.get("opponent"), msg, sm.get("game_id"))
+            influence.on_game_end(sm, defense.build_context(msg.get("chat")))
             metrics.record("end", game_id=sm.get("game_id"), game_index=msg.get("game_index"),
                            result=msg.get("result"), reason=msg.get("reason"),
                            match_over=msg.get("match_over"), llm=llm.usage())

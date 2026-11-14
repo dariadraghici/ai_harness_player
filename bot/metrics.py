@@ -102,6 +102,17 @@ def record_decision(game_id, level, elapsed, why="", tokens=None, cost=None, **e
                   why=why, tokens=tokens, cost=cost, **extra)
 
 
+def record_influence(**fields):
+    """One influence attempt, at send time (PROMPT-CHAT section 7). ev="influence". Never raises."""
+    return record("influence", ev="influence", **fields)
+
+
+def record_influence_result(**fields):
+    """The scored result of an influence attempt, one decision (one round when simultaneous) later.
+    ev="influence_result". Never raises."""
+    return record("influence_result", ev="influence_result", **fields)
+
+
 def record(kind, **fields):
     """Append one metrics line to <memory>/metrics/<container_id>.jsonl. Never raises."""
     try:

@@ -69,8 +69,8 @@ def finalize(decision, spec, legal, rejected=None):
         action = _filtered_action(action, profile) or action
         if not action:
             action = safe_action(spec, legal, rejected, profile)
-    chat = decide_mod.clean_chat(decision.chat, profile)
-    return Decision(action, chat, decision.level, decision.why)
+    chat = decide_mod.clean_chat(decision.chat, profile, goal=decision.goal)
+    return Decision(action, chat, decision.level, decision.why, decision.goal)
 
 
 def safe_action(spec, legal, rejected=None, profile=None, observation="", variant=None):
@@ -186,7 +186,12 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
             raise engines_base.NotAvailable("no verified simulator")
         if engine is None:
             raise engines_base.NotAvailable("no engine for family %s" % family)
-        raw = engine.candidates(spec, turn_msg, deadline - 2.0) or []
+        try:
+            from .chat import influence as _influence
+            engine.want_replies = _influence.wants_replies(spec, start_msg)     # r_likely / r_target for the chat
+        except Exception:
+            engine.want_replies = False
+        raw = engine.candidates(spec, turn_msg, deadline - 2.0 - config.LLM_RESERVE_S) or []
         for c in raw:
             a = match_legal(c.action, usable) if usable else c.action
             if a and (rejected is None or norm(a) != norm(rejected)):
@@ -219,7 +224,7 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
                     allowed = [c.action for c in candidates]
                     a = match_legal(res["action"], allowed)
                     if a:
-                        best = finalize(Decision(a, res["chat"], 3, "engine+model: " + res["why"]),
+                        best = finalize(Decision(a, res["chat"], 3, "engine+model: " + res["why"], res.get("goal")),
                                         spec, usable, rejected)
                     else:
                         # Keep the engine move; the model's chat may not fit it.
@@ -228,14 +233,14 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
                 elif usable:
                     a = match_legal(res["action"], usable)
                     if a:
-                        best = finalize(Decision(a, res["chat"], 2, "model: " + res["why"]),
+                        best = finalize(Decision(a, res["chat"], 2, "model: " + res["why"], res.get("goal")),
                                         spec, usable, rejected)
                     else:
                         log.warning("L2 action not legal: %r" % res["action"][:80])
                 else:
                     a = " ".join(res["action"].split())
                     if a and (rejected is None or norm(a) != norm(rejected)):
-                        best = finalize(Decision(a, res["chat"], 2, "model (no legal list): " + res["why"]),
+                        best = finalize(Decision(a, res["chat"], 2, "model (no legal list): " + res["why"], res.get("goal")),
                                         spec, usable, rejected)
                 report(best)
     except Exception:

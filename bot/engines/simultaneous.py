@@ -73,7 +73,24 @@ class SimultaneousEngine(base.MixedEngine):
             "zero-sum" if res.get("zero_sum") else "not zero-sum", value,
             "" if not res.get("w") else ", exploiting their pattern with weight %.2f (best response %s, %d observed "
             "actions)" % (res["w"], res.get("br"), res.get("n_obs", 0)), mix)
+        self._stash_replies(res, pick, spec, turn_msg, game)
         return self.mixed([{"action": r["action"], "p": r["p_final"]} for r in rows], pick, value, head)
+
+    def _stash_replies(self, res, pick, spec, turn_msg, game):
+        """The payoff matrix and our drawn action, for the influence layer (their likely and weakest reply, a
+        promise we can keep, a pattern we can break). The previous drawn action is kept in game.extra."""
+        try:
+            prev = game.extra.get("last_pick")
+            game.extra["last_pick"] = pick
+            matrix, acts = res.get("matrix"), res.get("opp_actions")
+            if not matrix or not acts or pick not in acts:
+                return
+            base.LAST_REPLIES.update(
+                family=self.family, game=turn_msg.get("game_index"), turn=turn_msg.get("turn"), action=pick,
+                matrix=matrix, acts=list(acts), model=dict(res.get("model") or {}), opp_eq=dict(res.get("opp_eq") or {}),
+                prev_action=prev)
+        except Exception:
+            base.log.exception("simultaneous: reply table not published")
 
 
 base.register(SimultaneousEngine())

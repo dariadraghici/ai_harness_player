@@ -60,6 +60,7 @@ def _run_prep(msg, deadline):
 
     done = phase_a(game_id, game_name, variants, deadline)
     analyses = align(done)
+    mark_chat_is_move(done)
     t_a = time.monotonic()
     log.info("prep %s: phase A %d/%d variants ready in %.1fs" % (
         game_id, len(done), len(variants), t_a - t_start))
@@ -74,6 +75,20 @@ def _run_prep(msg, deadline):
     mastery.refine(done, analyses, deadline)
     log.info("prep %s: strategy mastery persisted in %.1fs" % (game_id, time.monotonic() - t_a))
     return done
+
+
+def mark_chat_is_move(specs):
+    """PROMPT-CHAT section 1: is talking the move in this game? Decided once, here, from the rules and the sample
+    turn, and stored with the profile (a game where the words ARE the move gets no influence layer). Never raises."""
+    try:
+        from ..chat import offense
+        for s in specs:
+            before = bool(s.profile.chat_is_move)
+            if offense.detect_chat_is_move(s) != before:
+                s.profile.chat_is_move = True
+                memory.save_variant(s)
+    except Exception:
+        log.exception("chat_is_move marking failed")
 
 
 def run_chains(specs, analyses, gen_end, verify_end):

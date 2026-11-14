@@ -17,7 +17,7 @@ import time
 
 from .. import config, llm, log, opponents
 from ..engines import guardrails
-from . import defense, offense
+from . import defense, guards, influence, offense
 
 _PROMPT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts")
 _cache = {}
@@ -106,8 +106,12 @@ def _match_legal(action, legal):
                  and " ".join(candidate.split()).casefold() == normalized), None)
 
 
-def clean_chat(text, profile=None, fallback=None, action=None, ctx=None, turn_msg=None):
-    """Chat post-processing: string, single line, <= 200 chars, never empty, filtered."""
+def clean_chat(text, profile=None, fallback=None, action=None, ctx=None, turn_msg=None, goal=None):
+    """Chat post-processing: string, single line, <= 200 chars, never empty, filtered.
+
+    goal: the influence goal the line serves; a tactic that may state an intent (allow_claims) is not treated as a
+    plan leak here (guards.check_outgoing has already vetted the line against the ledger and the leak checks)."""
+    allow = bool(goal is not None and getattr(goal, "allow_claims", False))
     family = profile.family if profile else "unknown"
     contextual_fallback = offense.fallback_line(family, turn_msg, ctx)
     if not isinstance(text, str):
@@ -119,7 +123,7 @@ def clean_chat(text, profile=None, fallback=None, action=None, ctx=None, turn_ms
         text = fallback or (contextual_fallback if profile else config.CHAT_FALLBACK)
     if profile and family != "unknown" and text == config.OPENING_FALLBACK:
         text = contextual_fallback
-    if offense.reveals_plan(text, action):
+    if offense.reveals_plan(text, action, allow_claims=allow):
         log.warning("replaced plan-revealing chat")
         text = fallback if fallback and not offense.reveals_plan(fallback, action) else contextual_fallback
     try:
@@ -129,7 +133,7 @@ def clean_chat(text, profile=None, fallback=None, action=None, ctx=None, turn_ms
         filtered = guardrails.safe_chat(profile)
     if not isinstance(filtered, str) or not filtered.strip():
         filtered = guardrails.safe_chat(profile)
-    if offense.reveals_plan(filtered, action):
+    if offense.reveals_plan(filtered, action, allow_claims=allow):
         filtered = contextual_fallback
         try:
             filtered = guardrails.filter_outgoing(filtered, "chat", profile)
@@ -150,7 +154,42 @@ def _system(spec, name):
                 FAMILY=family, TACTICS=offense.tactics(family))
 
 
-def build_decide_messages(spec, start_msg, turn_msg, ctx, candidates, legal):
+def render_objective(goal, ledger=None):
+    """The CHAT OBJECTIVE block of the decision call, or "" for a plain quiet turn (the normal chat guidance then
+    applies). Pure text from data: the tactic table in chat/offense.py, never a canned line."""
+    if goal is None or (goal.tactic_id == "quiet" and not goal.is_control):
+        return ""
+    tactics = offense.TACTICS
+    shown = tactics.get(goal.tactic_id, tactics["quiet"])
+    shadow = tactics.get(goal.shadow_tactic) if goal.is_control else None
+    alt = ""
+    if goal.alt_tactic and goal.alt_tactic in tactics:
+        alt = ("If, and only if, your chosen action fits this tactic (%s), use this intent instead: %s\n" % (
+            "puts chips or stakes in (bet, raise, call, all-in)" if goal.alt_tactic == "strength_claim"
+            else "is passive (check, pass, wait)", offense.intent_text(goal, goal.alt_tactic)))
+    analysis = ""
+    if goal.from_engine and goal.engine_action and (goal.tactic_id != "quiet" or goal.is_control or goal.alt_tactic):
+        a = offense.analyze_replies(goal.replies) or {}
+        analysis = ("ENGINE ANALYSIS (internal, assumes you play %s): their most likely reply is %s (value %+.2f for "
+                    "us), their weakest reply is %s (value %+.2f for us), gap %.2f. If you play a different move, "
+                    "ignore the intent and write one neutral line.\n" % (
+                        goal.engine_action, a.get("r_likely", "?"), a.get("v_likely", 0.0), a.get("r_target", "?"),
+                        a.get("v_target", 0.0), a.get("gap", 0.0)))
+    entries = ledger.recent(3) if ledger is not None else []
+    said = " | ".join(e["line"][:120] for e in entries) or "(nothing yet)"
+    wants_target = bool((shadow or shown).get("target"))
+    target = ""
+    if wants_target:
+        target = ('Also add the field "target" to your JSON: the one action the OPPONENT should play (or avoid) '
+                  'for this to work, in the game\'s action format, or "" if there is none. Bookkeeping only; never '
+                  'put it in the chat.')
+    return fill(template("chat_objective.txt"), TACTIC=goal.tactic_id, KIND=goal.kind, CLASS=goal.opp_class,
+                INTENT=offense.intent_text(goal) if goal.tactic_id != "quiet" else shown["intent"], ALT=alt,
+                ANALYSIS=analysis, PRIVATE="secret numbers, cards, hands, budgets, private values",
+                LEDGER=said, TARGET=target)
+
+
+def build_decide_messages(spec, start_msg, turn_msg, ctx, candidates, legal, goal=None, ledger=None):
     """The messages of the decision call. Public so tests and the demo can show the prompt."""
     start_msg = start_msg or {}
     score = turn_msg.get("match_score") or start_msg.get("match_score") or {}
@@ -232,8 +271,13 @@ def build_decide_messages(spec, start_msg, turn_msg, ctx, candidates, legal):
         parts.append("TRUTH POLICY: answer only with a verbatim phrase supported by the document in OBSERVATION. If none supports an answer, use the exact unknown response specified in GAME RULES. Never infer or invent facts.")
     elif family == "deals" and candidates:
         parts.append("DEALS POLICY: choose only a listed engine candidate; code enforces our reservation limit. Your chat must not reveal that limit.")
+    objective = render_objective(goal, ledger)
+    if objective:
+        parts.append(objective)
+    wants_target = bool(objective and '"target"' in objective)
     parts.append('Reply immediately with one JSON object and no analysis: '
-                 '{"action": "...", "chat": "..."}')
+                 + ('{"action": "...", "chat": "...", "target": "..."}' if wants_target
+                    else '{"action": "...", "chat": "..."}'))
     return [{"role": "system", "content": _system(spec, "decide_system.txt")},
             {"role": "user", "content": "\n\n".join(parts)}]
 
@@ -261,7 +305,13 @@ def decide(spec, start_msg, turn_msg, ctx, candidates, legal, timeout):
         except Exception:
             log.exception("deals policy candidate generation failed")
 
-    msgs = build_decide_messages(spec, start_msg, turn_msg, ctx, policy_candidates, legal)
+    goal, ledger = None, None
+    try:
+        goal = influence.prepare(spec, start_msg or {}, turn_msg, ctx, policy_candidates)
+        ledger = influence.state_for(start_msg or {}).ledger
+    except Exception:
+        log.exception("influence planning failed, no objective this turn")
+    msgs = build_decide_messages(spec, start_msg, turn_msg, ctx, policy_candidates, legal, goal, ledger)
     text = llm.complete(msgs, max_tokens=config.DECIDE_MAX_TOKENS, timeout=timeout, tag="decide")
     obj = parse_json_object(text)
     if not obj:
@@ -280,6 +330,12 @@ def decide(spec, start_msg, turn_msg, ctx, candidates, legal, timeout):
     if not isinstance(action, str) or not action.strip():
         return None
     action = action.strip()
+    try:       # a promise we made (commitment) and that is due: the answer we promised, when the engine lists it
+        action, kept = influence.honor_promise(start_msg or {}, action, [c.action for c in policy_candidates])
+        if kept:
+            log.info("promise %s: answering with %r" % (kept, action))
+    except Exception:
+        log.exception("promise check failed")
     chat = obj.get("chat")
     why = str(obj.get("why") or "")[:120]
 
@@ -318,9 +374,42 @@ def decide(spec, start_msg, turn_msg, ctx, candidates, legal, timeout):
         return None
     if not isinstance(filtered_action, str) or not filtered_action.strip():
         return None
+    goal = offense.resolve_goal(goal, filtered_action)
+    chat, goal = vet_chat(chat, obj, goal, ledger, spec, filtered_action, turn_msg, ctx)
     return {"action": filtered_action, "chat": clean_chat(
-        chat, profile, action=filtered_action, ctx=ctx, turn_msg=turn_msg),
-            "why": why}
+        chat, profile, action=filtered_action, ctx=ctx, turn_msg=turn_msg, goal=goal),
+            "why": why, "goal": goal}
+
+
+def vet_chat(chat, obj, goal, ledger, spec, action, turn_msg, ctx):
+    """The code checks of PROMPT-CHAT section 2 on the model's chat line. Returns (line, goal). A blocked line is
+    replaced by the stored safe line and the goal is downgraded to quiet (the tactic did not run). The target the
+    model named is attached to the goal when it is usable. Never raises."""
+    try:
+        observation = str((turn_msg or {}).get("observation") or "")
+        ok, reason, line = guards.check_outgoing(chat, spec, ledger, goal, action, observation, ctx, turn_msg)
+        if ok and goal is not None and goal.from_engine and goal.engine_action \
+                and " ".join(str(action).split()).casefold() != " ".join(goal.engine_action.split()).casefold() \
+                and goal.tactic_id != "quiet":
+            ok, reason, line = False, "action-changed", guards.safe_line(spec, turn_msg, ctx)    # not the analysed move
+        if not ok:
+            log.warning("chat blocked (%s): %.80r" % (reason, chat))
+            if goal is not None and goal.tactic_id != "quiet":
+                downgraded = offense._quiet(cls=goal.opp_class, game=goal.game, turn=goal.turn)
+                downgraded.is_control, downgraded.shadow_tactic = goal.is_control, goal.shadow_tactic
+                downgraded.lag = goal.lag
+                downgraded.resend = goal.resend
+                goal = downgraded
+            return line, goal
+        target = obj.get("target") if isinstance(obj, dict) else None
+        if goal is not None and isinstance(target, str):
+            target = " ".join(target.split())[:40]
+            if target and target.casefold() != " ".join(str(action).split()).casefold():
+                goal.target_action = target
+        return line, goal
+    except Exception:
+        log.exception("vet_chat failed, sending the safe line")
+        return guards.safe_line(spec, turn_msg, ctx), None
 
 
 def opening_chat(spec, start_msg, ctx, timeout):
@@ -345,4 +434,9 @@ def opening_chat(spec, start_msg, ctx, timeout):
             text = obj.get("chat")
     fallback = (config.OPENING_FALLBACK if family == "unknown"
                 else offense.fallback_line(family, start_msg, ctx))
+    if text is not None:
+        ok, reason, line = guards.check_outgoing(text, spec, None, None, "", "", ctx, start_msg)
+        if not ok:
+            log.warning("opening chat blocked (%s)" % reason)
+        text = line
     return clean_chat(text, profile, fallback=fallback, ctx=ctx, turn_msg=start_msg)

@@ -164,11 +164,15 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `scripts/batch_runner.py` | batch runner: plays N practice matches across games and opponents (random, self); prints ASCII metrics table (wins, warnings, timeouts, answer times p50/p99, cost, peak RSS, sandbox children, CPU seconds per match); `--jobs N` runs matches in parallel with one `ARENA_ROOT` per worker (default host CPUs - 1 with `--fake`, never parallel with the real key); `--set BOT_X=V` passes a bot setting to every match (for example `BOT_RESOURCES=off`) | real |
 | `scripts/arena_lite.py` | runs any arena-lite command from the repository root and adds `testgames/` to its games, without editing the kit | real |
 | `scripts/keyinfo.py` | budget and spend of the dev key | real |
+| `scripts/influence_report.py` | per family and tactic: attempts, hit rate, average quality drop, the control baseline, lift and a keep / drop / more-data verdict, from the `influence` / `influence_result` events in the metrics files (`--path`, `--json`, `--notes FILE.md` for the presentation) | real |
 | `logo.png` | square team logo (512x512 PNG) for the Docker image | real |
 | `tests/__init__.py` | sets `BOT_FAKE_LLM=1` for all tests | real |
 | `tests/session_script.py` | `BotProc` (bot as child process) and the scripted arena session, reused by `check_image.py` | real |
 | `tests/test_protocol.py` | session, cold start, garbage, warning, null legal actions, watchdog, model failure, closed stdin | real |
 | `tests/test_units.py` | memory, ladder, JSON parsing, chat cleanup, defense block, clock proportions | real |
+| `tests/test_influence.py` | influence layer: guards (format, leak, collusion, abuse, ledger, speech rules at `ready`), planner (classes, neutral set, control rate, degrade to quiet), scoring with lag and warning, classifier, prompt slot with the untrusted block, exactly one model call per turn | real |
+| `tests/test_influence_report.py` | the influence report: attempts, hit rate, control baseline, lift | real |
+| `tests/test_influence_phase2.py` | phase 2: reply analysis, bandit, gap-driven planning, quality drop, promises, the engine publishing its reply tables (think_ahead with 1 and 2 workers, read_opponent), the chain through decide and the ladder | real |
 | `tests/test_kit.py` | kit message shapes (example action from kit rules, specialist found by label, variant settings in the prompt) and five fake-LLM matches on arena-lite that must be CLEAN (skipped without the kit) | real |
 | `tests/test_batch_runner.py` | unit tests for batch runner: CLI argument parsing, replay parsing, metric aggregation, ASCII table formatting | real |
 | `tests/test_metrics.py` | unit tests for extended metrics logging: per-call tokens, cost calculation, decision recording | real |
@@ -188,12 +192,17 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/chat/__init__.py` | package marker | real |
 | `bot/chat/decide.py` | THE single decision call (move + chat), opening chat, JSON parsing, chat cleanup + guardrails filter | real |
 | `bot/chat/defense.py` | opponent chat -> `ChatContext`, injection flags, the untrusted block for prompts | basic |
-| `bot/chat/offense.py` | chat tactics per family for the prompt, fallback lines | stub |
+| `bot/chat/offense.py` | chat tactics per family for the prompt, fallback lines (4 per family, rotated by turn and game); the INFLUENCE planner: the 15-tactic table as data (generic and engine-targeted intents), `analyze_replies` (r_likely, r_target, gap, a promise, a pattern from the engine's reply table), `eligible_arms`, `plan_influence` (deterministic family defaults without a bandit, bandit-driven with one; small gap = credibility, large gap = no control and no exploration), the per-match claims and promises `Ledger`, `detect_chat_is_move`; never raises, degrades to `quiet` | real |
+| `bot/chat/guards.py` | `check_outgoing`: every outgoing chat line (turns and the `ready` line) in code: format (one line, 200 chars, no fences or JSON), private-token and own-move leak, collusion, abuse, plan statements, ledger contradiction, then the game's speech rules; a blocked line becomes the stored safe line | real |
+| `bot/chat/score.py` | `score_prediction`: did the opponent do what the influence line aimed at (hit: the target appears MORE often than before), one decision later or one round later in simultaneous games, void after a `warning`; `their_quality_drop` from the engine's reply table (sequential games, unambiguous reply) | real |
+| `bot/chat/influence.py` | per-match influence state: scores due predictions, classifies the opponent, reads the engine's reply table, builds the bandit from the statistics in /memory, plans the goal (`prepare`); `on_sent` logs the attempt and queues its score; promises (`honor_promise`); `wants_replies`; `BOT_INFLUENCE=off` is the kill switch, `BOT_INSTRUCTION_PROBE=on` opts in to the probe tactic | real |
+| `bot/chat/bandit.py` | Thompson sampling over the tactics of a family (the quiet arm is the controls), prior = family-wide statistics of all opponents capped at 6 observations, exploration bounded per match and off on decisive turns | real |
+| `bot/prompts/chat_objective.txt` | the CHAT OBJECTIVE slot injected into the single decision call (intent, limits, ledger, target field) | real |
 | `bot/prompts/decide_system.txt` | system prompt of the decision call (stable, cacheable) | basic |
 | `bot/prompts/opening_system.txt` | system prompt of the opening chat line | basic |
 | `bot/prompts/classify_system.txt` | system prompt of the prep classification (used by luckydevs-3's classify) | basic |
 | `bot/prompts/classify_user.txt` | user template of the prep classification | basic |
-| `bot/opponents.py` | opponent profiles in `/memory/opponents/` (win/loss counters only) | stub |
+| `bot/opponents.py` | opponent profiles in `/memory/opponents/` (win/loss counters only); plus the influence classifier (`silent`, `scripted`, `reactive`, `unknown`) and per-tactic counters, versioned with `HARNESS_VERSION` | basic |
 | `bot/engines/guardrails.py` | `filter_outgoing` on every action and chat line (pass-through now), `extract_forbidden` | stub |
 | `bot/engines/truth.py` | Truth engine: answer only with a supporting quote | stub |
 | `bot/engines/deals.py` | Deals engine: values, reservation price, concessions | stub |

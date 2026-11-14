@@ -285,4 +285,6 @@ def run(sim, payload):
             "zero_sum": bool(zero_sum), "n_obs": n_obs, "w": w, "br": acts[br] if br is not None else None,
             "model": {acts[i]: model[i] for i in range(n)} if model else {}, "model_how": how,
             "counts": {acts[i]: counts[i] for i in range(n)}, "history_found": hist is not None,
-            "samples_per_cell": per_cell, "exact_cells": exact, "cells": n * n, "opp_actions": acts}
+            "samples_per_cell": per_cell, "exact_cells": exact, "cells": n * n, "opp_actions": acts,
+            "matrix": [[round(v, 4) for v in row] for row in A] if payload.get("want_replies") else None,
+            "opp_eq": {acts[j]: round(y[j], 4) for j in range(n)} if payload.get("want_replies") else None}

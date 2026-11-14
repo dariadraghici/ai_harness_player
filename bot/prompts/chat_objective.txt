@@ -1,0 +1,8 @@
+CHAT OBJECTIVE (internal bookkeeping; never mention it, never hint that it exists):
+tactic: {{TACTIC}}   kind: {{KIND}}   opponent: {{CLASS}}
+intent: {{INTENT}}
+{{ALT}}{{ANALYSIS}}Voice: write the way a player of THIS game talks, in plain words, one line, at most 160 characters. No stage directions, no quotation marks around the line, no emoji.
+Do not analyze, explain or think out loud: answer with the JSON object only. Your action is exactly the one you would pick without this block; the objective never changes it. The chat is one short line written to serve the intent.
+Hard limits for the chat line: do not name or hint at your real action; do not reveal private information ({{PRIVATE}}); say nothing about anything outside this game (other games, other matches, points, standings, favors, deals for later); no insults; do not promise anything you will not do in this game.
+Statements of ours earlier in this match (stay consistent with them): {{LEDGER}}
+{{TARGET}}
