@@ -4,13 +4,14 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from .. import config, log, memory
+from .. import config, log, memory, resources
 from . import sandbox
 
 JOB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mastery_job.py")
 STRATEGY_FILE = "strategy.json"
 SAFETY_MARGIN_S = 7.0
-ROUND_S = 18.0
+ROUND_S = 18.0              # today's round (BOT_RESOURCES=off); with the plan rounds are short, see round_s()
+SHORT_ROUND_S = 8.0         # many short rounds: the deadline is never what kills a round
 MIN_ROUND_S = 2.5
 MAX_PLAYBOOK_LINES = 12
 MAX_PLAYBOOK_CHARS = 900
@@ -18,6 +19,23 @@ MAX_PLAYBOOK_CHARS = 900
 
 def safe_deadline(deadline, margin=SAFETY_MARGIN_S):
     return max(0.0, float(deadline) - max(0.0, float(margin)))
+
+
+def round_s():
+    """Seconds of one self-play round: short when the resource plan is on, today's 18 s when it is off."""
+    return SHORT_ROUND_S if resources.enabled() else ROUND_S
+
+
+def _tasks(eligible, children, rounds):
+    """(spec, seed) for one round: every eligible variant once, then more seeds round-robin until every free
+    child has work. The seed of a task is the number of rounds the variant has had plus its task index."""
+    tasks, per_spec = [], {}
+    for k in range(max(len(eligible), children)):
+        spec = eligible[k % len(eligible)]
+        j = per_spec.get(id(spec), 0)
+        per_spec[id(spec)] = j + 1
+        tasks.append((spec, rounds[id(spec)] + j))
+    return tasks
 
 
 def _empty_summary():
@@ -86,7 +104,7 @@ def _persist(spec, summary, verified):
         log.exception("strategy persistence failed for %s/%s", spec.game_id, spec.label)
 
 
-def _run_one(spec, budget, seed):
+def _run_one(spec, budget, seed, plan=None):
     sample = spec.sample_turn if isinstance(spec.sample_turn, dict) else {}
     observation = sample.get("observation")
     if not observation or not spec.simulator_path:
@@ -97,8 +115,9 @@ def _run_one(spec, budget, seed):
         "budget_s": round(budget, 3),
         "seed": seed,
     }
-    return sandbox.run_job(spec.simulator_path, JOB_FILE, payload,
-                           max(1.0, budget + 2.0), cpu_s=120)
+    plan = plan or resources.plan("prep_mastery")
+    return sandbox.run_job(spec.simulator_path, JOB_FILE, payload, max(1.0, budget + 2.0),
+                           mem_mb=plan.child_mem_mb, cpu_s=plan.child_cpu_s)
 
 
 def refine(specs, analyses, deadline):
@@ -111,16 +130,23 @@ def refine(specs, analyses, deadline):
         for spec in specs:
             _persist(spec, totals[id(spec)], False)
         return totals
+    plan = resources.plan("prep_mastery")
+    from . import sandbox as _sb
+    children = max(1, min(plan.children, _sb.capacity()))
     while time.monotonic() + MIN_ROUND_S < end:
         left = end - time.monotonic()
-        budget = min(ROUND_S, left - 1.0)
+        budget = min(round_s(), left - 1.0)
         if budget < MIN_ROUND_S:
             break
-        workers = min(2, len(eligible))
+        rounds = {id(s): totals[id(s)]["rounds"] + totals[id(s)]["errors"] for s in eligible}
+        if resources.enabled():
+            tasks = _tasks(eligible, children, rounds)
+        else:
+            tasks = [(spec, index + totals[id(spec)]["rounds"]) for index, spec in enumerate(eligible)]
+        workers = min(children, len(tasks)) if resources.enabled() else min(2, len(eligible))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="mastery") as pool:
-            futures = [pool.submit(_run_one, spec, budget, index + totals[id(spec)]["rounds"])
-                       for index, spec in enumerate(eligible)]
-            for spec, future in zip(eligible, futures):
+            futures = [pool.submit(_run_one, spec, budget, seed, plan) for spec, seed in tasks]
+            for (spec, _), future in zip(tasks, futures):
                 try:
                     _merge(totals[id(spec)], future.result())
                 except Exception:

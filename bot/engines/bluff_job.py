@@ -117,12 +117,13 @@ def run(sim, payload):
     if g.player(state) != g.me:
         return {"ok": False, "live": True, "reason": "a simultaneous step is not played by this engine"}
     la = g.legal(state)
+    grow = max(1.0, float(payload.get("samples_scale") or 1.0))      # default 1.0 = today's caps
     rng = random.Random(zlib.crc32(C.dump(payload.get("observation", "")).encode("utf-8")))
     if len(la) == 1:
         return {"ok": True, "live": True, "algo": "single", "actions": [
             {"action": la[0], "ev": 0.0, "se": 0.0, "p": 1.0, "n": 0}], "worlds": 0}
     hyps, paths, exact = C.sample_hypotheses(g, state, la, C.Clock(WORLD_SHARE * clock.left()), rng,
-                                             int(payload.get("worlds") or MAX_WORLDS), WORLD_SEEDS)
+                                             int(payload.get("worlds") or int(MAX_WORLDS * grow)), WORLD_SEEDS)
     if hyps:
         worlds = [C.world_state(state, paths, h) for h in hyps]
     else:
@@ -148,7 +149,7 @@ def run(sim, payload):
             sq[i] += v * v
             cnt[i] += 1
         samples += 1
-        if clock.up() or samples >= SAMPLES_CAP:
+        if clock.up() or samples >= int(SAMPLES_CAP * grow):
             break
     ok_idx = [i for i in range(n) if cnt[i] > 0]
     if not ok_idx:

@@ -153,6 +153,9 @@ class BackgroundCompute:
             if spec is None:
                 self._paused.wait(0.5)
                 continue
+            if sandbox.live_count() >= sandbox.capacity():
+                self._paused.wait(0.5)      # live work (warm engine children) holds every slot: do not queue
+                continue
             self._compute(spec)
 
     def _compute(self, spec):

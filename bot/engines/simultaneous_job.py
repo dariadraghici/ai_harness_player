@@ -67,7 +67,7 @@ def pair_for(me, ours, theirs):
     return [ours, theirs] if me == 0 else [theirs, ours]
 
 
-def estimate_matrices(g, state, acts, clock, unknown, rng):
+def estimate_matrices(g, state, acts, clock, unknown, rng, grow=1.0):
     """Returns (A, B, samples per cell, exact cells), or None when some cell got no sample in time.
     A[i][j] is our return when we play acts[i] and they play acts[j]; B[i][j] is theirs."""
     n = len(acts)
@@ -114,7 +114,7 @@ def estimate_matrices(g, state, acts, clock, unknown, rng):
                 sb[i][j] += r[1 - me]
             cnt[i][j] += 1
         rounds += 1
-        if clock.up() or rounds >= SAMPLES_CAP:
+        if clock.up() or rounds >= int(SAMPLES_CAP * grow):
             stop = True
     if any(cnt[i][j] == 0 for i in range(n) for j in range(n)):
         return None
@@ -249,7 +249,8 @@ def run(sim, payload):
             {"action": acts[0], "p_eq": 1.0, "p_final": 1.0, "ev_eq": 0.0, "ev_model": 0.0}],
             "value": 0.0, "zero_sum": True, "n_obs": 0, "w": 0.0, "br": acts[0], "model": {}, "counts": {}}
     unknown = bool(payload.get("unknown"))
-    est = estimate_matrices(g, state, acts, C.Clock(MATRIX_SHARE * clock.left()), unknown, rng)
+    grow = max(1.0, float(payload.get("samples_scale") or 1.0))      # default 1.0 = today's caps
+    est = estimate_matrices(g, state, acts, C.Clock(MATRIX_SHARE * clock.left()), unknown, rng, grow)
     if est is None:
         return {"ok": False, "live": True, "reason": "the payoff matrix could not be estimated in the time given"}
     A, B, per_cell, exact = est
@@ -259,7 +260,7 @@ def run(sim, payload):
     if zero_sum:
         A = [[(A[i][j] - B[i][j]) / 2.0 for j in range(n)] for i in range(n)]
         B = [[-v for v in row] for row in A]
-    x, y = regret_matching(A, B, RM_ITERS, C.Clock(0.5 * max(0.05, clock.left())))
+    x, y = regret_matching(A, B, int(RM_ITERS * max(1.0, float(payload.get("samples_scale") or 1.0))), C.Clock(0.5 * max(0.05, clock.left())))
     ev_eq = [sum(A[i][j] * y[j] for j in range(n)) for i in range(n)]
     value = sum(x[i] * ev_eq[i] for i in range(n))
     hist = opponent_history(g, state, acts, la)

@@ -50,9 +50,36 @@ def unseen_actions(actions, observation):
     return [action for action in actions if not action_seen(action, observation)]
 
 
+VALUE_SLOPE = 0.5               # same as guess_job.py (the job is standalone and cannot be imported)
+MAX_RESULT_ACTIONS = 14
+
+
 class GuessEngine(base.SimEngine):
     family = "guessing"
     job_file = JOB_FILE
+    splittable = True
+
+    def merge(self, results, payload):
+        """Every part sampled the same hypotheses and scored its share of the actions: pool the scored actions,
+        re-rank by cost (ties: more feedback classes, then position in the legal list) and value them against the pooled best."""
+        if any(r.get("algo") != "split" for r in results):
+            return results[0]
+        rows, seen = [], set()
+        for r in results:
+            for a in r.get("actions") or []:
+                if a["action"] not in seen:
+                    seen.add(a["action"])
+                    rows.append(dict(a))
+        if not rows:
+            return results[0]
+        rows.sort(key=lambda a: (a["cost"], -a.get("classes", 0), a.get("i", 0)))
+        best = rows[0]["cost"]
+        rows = rows[:MAX_RESULT_ACTIONS]
+        for a in rows:
+            a["value"] = max(-1.0, 1.0 - VALUE_SLOPE * (a["cost"] - best))
+        out = dict(results[0])
+        out.update(actions=rows, scored=sum(int(r.get("scored") or 0) for r in results))
+        return out
 
     def build(self, res, spec, turn_msg, game):
         out = []

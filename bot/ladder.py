@@ -130,9 +130,14 @@ def _within_margin(candidates):
     return [c for c in candidates if c.value >= best - config.CANDIDATE_MARGIN]
 
 
-def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds=None):
-    """Produce the decision for one turn. Never raises."""
+def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds=None, timing=None):
+    """Produce the decision for one turn. Never raises.
+
+    timing: an optional dict that receives the wall-clock split of the turn in seconds: l1_s (setup and the safe
+    move), l3_s (engine), l2_s (model call), final_s (what is left to return)."""
     t0 = time.monotonic()
+    if timing is None:
+        timing = {}
 
     def report(d):
         if progress:
@@ -172,6 +177,8 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
                                 else (start_msg or {}).get("chat"))
 
     # ---- L3: engine on a verified simulator
+    t_l3 = time.monotonic()
+    timing["l1_s"] = round(t_l3 - t0, 4)
     candidates = []
     try:
         engine = engines_base.get_engine(family)
@@ -199,6 +206,8 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
         candidates = []
 
     # ---- L2: one model call for move + chat (also picks among L3 candidates)
+    t_l2 = time.monotonic()
+    timing["l3_s"] = round(t_l2 - t_l3, 4)
     try:
         timeout = min(clock.llm_match_timeout(turn_msg, move_seconds), deadline - time.monotonic() - 1.0)
         if timeout < 1.0:
@@ -232,6 +241,8 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
     except Exception:
         log.exception("L2 failed, going down")
 
+    timing["l2_s"] = round(time.monotonic() - t_l2, 4)
+    timing["final_s"] = round(time.monotonic() - t0 - timing["l1_s"] - timing["l3_s"] - timing["l2_s"], 4)
     log.info("decision level=%d action=%r in %.2fs (%s)" % (
         best.level, best.action[:60], time.monotonic() - t0, best.why[:80]))
     return best

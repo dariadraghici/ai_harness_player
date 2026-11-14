@@ -19,6 +19,8 @@ Checks strictly covering ARENA-CONTRACT 2.9:
   10. No secrets inside image: no .env, secrets*, or private keys baked in
   11. Matching source repository: git commit label check and tree status (2.9.10)
   12. Full practice match with prep on arena-lite (RESULT: CLEAN) (2.9.2)
+  13. Idle between games (2.1): after a finished game and before the next start the container has no sandbox
+      child alive and its memory is back near the baseline (an idle specialist must cost almost nothing)
 
 Owner: luckydevs-1. Standard library only (RULES.md 23, 28).
 """
@@ -51,6 +53,68 @@ def docker_cmd(ref, envs=None):
     for k, v in (envs or {}).items():
         cmd += ["-e", "%s=%s" % (k, v)]
     return cmd + [ref]
+
+
+IDLE_RSS_SLACK_MB = 60           # the resident set after a game may exceed the baseline by this much
+
+
+def parse_top(text):
+    """Rows (pid, rss_kb, args, nice) from `docker top <name> -eo pid,rss,ni,args`; nice is 0 when the column is
+    missing."""
+    rows = []
+    for line in (text or "").splitlines()[1:]:
+        parts = line.split(None, 3)
+        if len(parts) >= 4 and parts[0].isdigit() and parts[1].isdigit() and parts[2].lstrip("-").isdigit():
+            rows.append((int(parts[0]), int(parts[1]), parts[3], int(parts[2])))
+        elif len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
+            rows.append((int(parts[0]), int(parts[1]), line.split(None, 2)[2], 0))
+    return rows
+
+
+def container_procs(name):
+    r = subprocess.run(["docker", "top", name, "-eo", "pid,rss,ni,args"], capture_output=True, text=True)
+    return parse_top(r.stdout) if r.returncode == 0 else []
+
+
+def idle_problems(before, after, slack_mb=IDLE_RSS_SLACK_MB):
+    """Problems found by comparing the process list at the baseline with the one after a finished game."""
+    problems = []
+    # The only child allowed between games is the low-priority background compute (bot/engines/bg_compute.py):
+    # at most one, niced. Anything else (an engine child, a verification child) is a leak.
+    kids = [row for row in after if "sandbox_child" in row[2]]
+    leaks = [k for k in kids if k[3] <= 0] + [k for k in kids if k[3] > 0][1:]
+    if leaks:
+        problems.append("%d sandbox child(ren) alive between games: %s" % (len(leaks), [k[0] for k in leaks]))
+    base_mb = sum(r[1] for r in before) / 1024.0
+    now_mb = sum(r[1] for r in after) / 1024.0
+    if now_mb > base_mb + slack_mb:
+        problems.append("memory %.0f MB after the game, baseline %.0f MB (slack %d MB)" % (now_mb, base_mb, slack_mb))
+    if not after:
+        problems.append("no process list from the container")
+    return problems
+
+
+def check_idle_between_games(ref):
+    name = "ld-idle-check-%d" % os.getpid()
+    cmd = docker_cmd(ref, {"BOT_FAKE_LLM": "1", "MEMORY_DIR": "/tmp/mem"})
+    cmd = cmd[:-1] + ["--name", name, cmd[-1]]
+    bot = BotProc(cmd)
+    problems = []
+    try:
+        time.sleep(2)
+        before = container_procs(name)
+        check_ready(*bot.ask(start_msg(1, match="idle1"), 30), 18.5, problems, "start g1", need_chat=True)
+        for n in (1, 2, 3):
+            check_action(*bot.ask(turn_msg(n), 20), 13.5, ["1", "2", "3"], problems, "turn %d" % n)
+        bot.send(end_msg(1, over=False))
+        time.sleep(2)
+        problems += idle_problems(before, container_procs(name))
+        bot.send({"type": "shutdown"})
+        bot.wait(15)
+    finally:
+        bot.cleanup()
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+    return len(problems) == 0, "; ".join(problems) if problems else "no sandbox child and memory near baseline between games"
 
 
 def check_docker_available():
@@ -376,6 +440,9 @@ def main():
 
     # 12. Full practice match with prep
     run_check("12. Practice match with prep on arena-lite (2.9.2)", check_practice_match, ref, args.real, args.skip_arena)
+
+    # 13. Idle between games
+    run_check("13. Idle between games: no child, memory near baseline", check_idle_between_games, ref)
 
     failed = [label for label, ok, _ in results if not ok]
     passed = len(results) - len(failed)

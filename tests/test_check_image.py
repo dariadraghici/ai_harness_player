@@ -15,6 +15,8 @@ from scripts.check_image import (
     check_proxy_and_security,
     check_source_and_commit_label,
     docker_cmd,
+    idle_problems,
+    parse_top,
 )
 
 
@@ -105,6 +107,39 @@ class CheckImageTests(unittest.TestCase):
         ok, detail = check_proxy_and_security("myimage:tag")
         self.assertFalse(ok)
         self.assertIn("crashed or produced no answer", detail)
+
+
+class IdleCheckTests(unittest.TestCase):
+    TOP = "PID RSS NI COMMAND\n1 30000 0 python -u -m bot.main\n57 22000 0 python -I -S -B /bot/prep/sandbox_child.py 512 120\n"
+
+    def test_parse_top(self):
+        rows = parse_top(self.TOP)
+        self.assertEqual([(r[0], r[1], r[3]) for r in rows], [(1, 30000, 0), (57, 22000, 0)])
+        self.assertEqual(parse_top(""), [])
+
+    def test_clean_idle_has_no_problems(self):
+        before = parse_top("PID RSS NI COMMAND\n1 30000 0 python -u -m bot.main\n")
+        after = parse_top("PID RSS NI COMMAND\n1 41000 0 python -u -m bot.main\n")
+        self.assertEqual(idle_problems(before, after), [])
+
+    def test_one_niced_background_child_is_allowed_two_are_not(self):
+        before = parse_top("PID RSS NI COMMAND\n1 30000 0 python -u -m bot.main\n")
+        bg = "PID RSS NI COMMAND\n1 30000 0 python -u -m bot.main\n58 20000 10 python -I -S -B /bot/prep/sandbox_child.py 64 15 10\n"
+        self.assertEqual(idle_problems(before, parse_top(bg)), [])
+        bg2 = bg + "59 20000 10 python -I -S -B /bot/prep/sandbox_child.py 64 15 10\n"
+        self.assertTrue(idle_problems(before, parse_top(bg2)))
+
+    def test_a_live_child_is_a_problem(self):
+        before = parse_top("PID RSS NI COMMAND\n1 30000 0 python -u -m bot.main\n")
+        self.assertTrue(any("sandbox child" in p for p in idle_problems(before, parse_top(self.TOP))))
+
+    def test_memory_far_above_baseline_is_a_problem(self):
+        before = parse_top("PID RSS NI COMMAND\n1 30000 0 python -u -m bot.main\n")
+        after = parse_top("PID RSS NI COMMAND\n1 400000 0 python -u -m bot.main\n")
+        self.assertTrue(any("memory" in p for p in idle_problems(before, after)))
+
+    def test_no_process_list_is_a_problem(self):
+        self.assertTrue(idle_problems([], []))
 
 
 if __name__ == "__main__":

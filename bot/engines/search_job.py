@@ -39,7 +39,7 @@ import zlib
 BIG = 10 ** 9
 INF = float("inf")
 EXACT, LOWER, UPPER = 0, 1, 2
-TT_CAP = 350000
+TT_CAP = 350000           # default; the payload may carry "tt_entries" (bot/resources.py sizes it from the child's memory)
 KNOWN_CAP = 3000
 EXPORT_NODES = 2500
 UCT_C = 1.0
@@ -424,8 +424,9 @@ def tactical_result(actions, value, note, depth=2):
 # ---------------------------------------------------------------- alpha-beta
 class AlphaBeta:
 
-    def __init__(self, g, clock, known, leaf_k, exact=False):
+    def __init__(self, g, clock, known, leaf_k, exact=False, cap=TT_CAP):
         self.g = g
+        self.cap = int(cap)
         self.clock = clock
         self.leaf_k = leaf_k
         self.exact = exact
@@ -454,7 +455,7 @@ class AlphaBeta:
         old = self.tt.get(key)
         if old is not None and old[0] > edepth:
             return
-        if old is None and len(self.tt) >= TT_CAP and not (edepth == BIG and flag == EXACT):
+        if old is None and len(self.tt) >= self.cap and not (edepth == BIG and flag == EXACT):
             return
         self.tt[key] = (edepth, flag, val, h, best)
 
@@ -532,7 +533,8 @@ class AlphaBeta:
 
 def alpha_beta(g, state, la, clock, payload, exact=False):
     margin = float(payload.get("margin") or 0.05)
-    ab = AlphaBeta(g, clock, payload.get("known"), int(payload.get("leaf_k") or 0), exact=exact)
+    ab = AlphaBeta(g, clock, payload.get("known"), int(payload.get("leaf_k") or 0), exact=exact,
+                   cap=max(1000, int(payload.get("tt_entries") or TT_CAP)))
     order = _gravity_order(g, state, la)
     done, depth, solved = None, 1, False
     max_depth = max(1, int(payload.get("exact_depth") or 400)) if exact else 400
@@ -754,6 +756,24 @@ def calibrate(g, state, la, rng, limit_s=0.1):
     return per_node, branching / float(max(1, n)), zero_sum
 
 
+def _part(payload):
+    """(index, count) of this part when several children search the same position, else (0, 1)."""
+    try:
+        parts = max(1, int(payload.get("parts") or 1))
+        part = int(payload.get("part") or 0)
+        if 0 <= part < parts:
+            return part, parts
+    except (TypeError, ValueError):
+        pass
+    return 0, 1
+
+
+def _empty_part(root_key, la):
+    """A part that was given no root move (more parts than moves): it adds nothing to the merge."""
+    return {"ok": True, "live": True, "algo": "none", "solved": False, "depth": 0, "nodes": 0, "playouts": 0,
+            "actions": [], "best_value": 0.0, "root_key": root_key, "branching": len(la), "zero_sum": True}
+
+
 def run(sim, payload):
     if sim is None:
         return {"ok": False, "reason": "no simulator loaded"}
@@ -766,7 +786,9 @@ def run(sim, payload):
     fast = BitboardGame.create(g, state, la, payload.get("variant"))
     if fast is not None:
         g, state, la = fast, fast.initial, fast.legal(fast.initial)
-    rng = random.Random(zlib.crc32(C.dump(payload.get("observation", "")).encode("utf-8")))
+    part, parts = _part(payload)
+    # part 0 of 1 is exactly the sequential search; part i of n draws its own random numbers (root parallelism)
+    rng = random.Random(zlib.crc32(C.dump(payload.get("observation", "")).encode("utf-8")) + part)
     try:
         root_key = g.key(state)
         cached = (payload.get("cache") or {}).get(root_key)
@@ -814,9 +836,12 @@ def run(sim, payload):
         exact_mode = (empty is not None and empty <= ENDGAME_EMPTY_MAX
                       and not payload.get("unknown") and payload.get("both_seats") is not False)
         out = None
+        mine = la[part::parts]                # root split: this part searches its share of the root moves
         if exact_mode:
+            if not mine:
+                return _empty_part(root_key, la)
             payload["exact_depth"] = min(400, max(1, empty + 1))
-            out = alpha_beta(g, state, la, C.Clock(max(0.05, 0.9 * clock.left())),
+            out = alpha_beta(g, state, mine, C.Clock(max(0.05, 0.9 * clock.left())),
                              payload, exact=True)
             per_node, branching, zero_sum = 0.0, float(len(la)), True
             use_mcts = False
@@ -833,8 +858,10 @@ def run(sim, payload):
                 depth2 = len(la) * max(branching, 1.0) * leaf_cost
                 use_mcts = depth2 > 0.5 * clock.left()
             if not use_mcts:
+                if not mine:
+                    return _empty_part(root_key, la)
                 share = 0.9 if gravity else AB_SHARE
-                out = alpha_beta(g, state, la, C.Clock(share * clock.left()), payload)
+                out = alpha_beta(g, state, mine, C.Clock(share * clock.left()), payload)
                 if (out is not None and not out["solved"] and out["best_value"] < 1.0 - 1e-9
                         and not gravity):
                     out = refine(g, state, la, clock, payload, rng, out)
@@ -858,6 +885,9 @@ def run(sim, payload):
         ab = out.pop("_ab", None)
         if ab is not None:
             out["known"] = export_known(g, ab, state, C.Clock(min(0.1, max(0.0, 0.5 * clock.left()))))
+        idx = dict((a, i) for i, a in enumerate(la))
+        for x in out.get("actions") or []:
+            x["i"] = idx.get(x["action"], 0)          # position in the legal list: a stable tie-break for merges
         out["live"] = True
         out["root_key"] = root_key
         out["zero_sum"] = zero_sum
