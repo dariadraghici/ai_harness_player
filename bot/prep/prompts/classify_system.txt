@@ -18,10 +18,12 @@ What each field is used for:
 - hidden_information: one short phrase saying what is hidden and from whom, or "none".
 - chance: one short phrase saying what is random (dealt cards, drawn secrets, dice), or "none".
 - speech_restrictions: ONLY what the rules literally forbid a player to say or mention, as one short plain sentence starting with "Never", without commentary. Empty string when the rules forbid nothing. A filter applies it to every chat line and action we send.
-- action_format: the exact syntax of one action, copied or closely paraphrased from the rules.
+- action_format: the exact syntax of one action, copied or closely paraphrased from the rules. It describes the VARIANT: no values of one particular deal.
 - action_regex: a Python regular expression that every valid action string fully matches (used with re.fullmatch), or an empty string if you cannot write one.
 - example_action: one concrete valid action string, exactly as it would be sent, with no quotes around it. It is SENT AS OUR MOVE when everything else fails, so it must be valid as is in a typical position; prefer an action the rules show.
-- playbook: at most 12 short lines, at most 900 characters in total: how to win, what to say in chat (offense), what to watch in the opponent's chat (defense), what never to say. It is pasted into every move decision, so keep it short.
+- playbook: at most 12 short lines, at most 900 characters in total: how to win, what to say in chat (offense), what to watch in the opponent's chat (defense), what never to say. It is pasted into every move decision of every game of this variant, so keep it short and general: it describes the VARIANT, never the values of one deal.
+
+IMPORTANT: a rules text may show a setup (a position, heap sizes, dealt cards, secret values, a document, a prize order). That is only a SAMPLE deal; every real game has its own deal. Never treat sample-deal values as fixed facts of the game, in any field.
 
 Answer with ONLY one JSON object with exactly these keys, no other text:
 {"family": "...", "family_quote": "...", "perfect_information": true, "simultaneous": false, "turn_structure": "...", "hidden_information": "...", "chance": "...", "speech_restrictions": "...", "action_format": "...", "action_regex": "...", "example_action": "...", "playbook": "..."}

@@ -142,7 +142,8 @@ _SIGNALS = {
     "think_ahead": _rx(r"\b(board|grid)\b", r"\b(cells?|squares?)\b",
                        r"\b(alternate|alternating|take turns|in turn)\b", r"\bin a (row|line)\b",
                        r"\b(capture|captures|pieces?|stones?|pawns?|tokens?)\b",
-                       r"\bperfect information\b", r"\bmoves? first\b"),
+                       r"\bperfect information\b", r"\bmoves? first\b",
+                       r"\broll(s|ing)? (a|one|two|the)? ?(six-sided )?(die|dice)\b"),
     "truth": _rx(r"\bdocument\b", r"\b(passage|article|the text below|source text|the text)\b",
                  r"\baccording to\b", r"\bunknown\b", r"\banswers? (the |each |a )?questions?\b",
                  r"\b(invent|invented|made[- ]up|fabricat|hallucinat)", r"\b(quote|cite|citation)\b"),
@@ -285,7 +286,7 @@ def quote_in_rules(quote, rules):
     r = _norm(rules)
     if q in r:
         return True
-    parts = [p.strip(" .,;:") for p in re.split(r"\.\.\.|…", q)]
+    parts = [p.strip(" .,;:") for p in re.split(r"\.\.\.|\u2026", q)]
     parts = [p for p in parts if len(p) >= 8]
     return bool(parts) and all(p in r for p in parts)
 
@@ -576,6 +577,7 @@ def resolve(fields, ev, rules, sample_turn):
         "quote": fields.get("quote", ""), "quote_ok": bool(fields.get("quote_ok")),
         "action_regex": fields.get("action_regex", ""),
         "example_source": example_source,
+        "rules_examples": list(rules_ex)[:8],   # for the ladder: other format-valid actions after a warning
         "turn_structure": ts,
         "hidden_information": fields.get("hidden_information", "none" if perf else ""),
         "chance": fields.get("chance", ""),
