@@ -21,6 +21,7 @@ from .chat import decide as decide_mod
 from .chat import defense, offense
 from .engines import base as engines_base
 from .engines import guardrails
+from .engines import wordle
 from .interfaces import Decision
 
 
@@ -182,7 +183,8 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
     candidates = []
     try:
         engine = engines_base.get_engine(family)
-        if spec is None or not spec.verified or not spec.simulator_path:
+        wordle_move = family == "guessing" and wordle.is_wordle_rules(spec.rules if spec else "")
+        if not wordle_move and (spec is None or not spec.verified or not spec.simulator_path):
             raise engines_base.NotAvailable("no verified simulator")
         if engine is None:
             raise engines_base.NotAvailable("no engine for family %s" % family)
@@ -211,7 +213,9 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
     try:
         left = deadline - time.monotonic()
         timeout = min(clock.llm_match_timeout(turn_msg, move_seconds), left - 1.0)
-        if (warning and left <= 10.0) or left < 4.0:
+        if family == "guessing" and wordle.is_wordle_rules(spec.rules if spec else ""):
+            log.info("Wordle move is code-selected; model is chat-only")
+        elif (warning and left <= 10.0) or left < 4.0:
             log.warning("L2 skipped: warning/deadline emergency with %.1fs left" % left)
         else:
             res = decide_mod.decide(spec, start_msg, turn_msg, ctx, candidates, usable, timeout)
