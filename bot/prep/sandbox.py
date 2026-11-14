@@ -29,7 +29,8 @@ Two ways to use a child:
 
 A Worker starts its child lazily, can be reused for many requests, restarts
 by itself after a kill, and holds no child once closed: an idle specialist
-has no child. At most MAX_CHILDREN children are alive at once in the process.
+has no child. At most `capacity()` children are alive at once in the process: MAX_CHILDREN by
+default, set_capacity(n) once per phase (bot/resources.py decides n).
 
 Example (the engines):
     w = sandbox.Worker(spec.simulator_path, cpu_s=600)
@@ -66,9 +67,61 @@ CHILD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sandbox_c
 
 _EOF = object()
 _TOO_LONG = object()
-_slots = threading.BoundedSemaphore(MAX_CHILDREN)
 _live = set()
 _live_lock = threading.Lock()
+
+
+class _SlotPool:
+    """Counting slots whose capacity can change at run time (once per phase, see set_capacity).
+
+    Shrinking never kills a running child: slots in use stay in use, new starts wait until fewer than
+    `capacity` are in use. Growing wakes the waiters at once."""
+
+    def __init__(self, capacity):
+        self._cond = threading.Condition()
+        self.capacity = max(1, int(capacity))
+        self.used = 0
+
+    def acquire(self, timeout):
+        end = time.monotonic() + max(0.0, timeout)
+        with self._cond:
+            while self.used >= self.capacity:
+                left = end - time.monotonic()
+                if left <= 0:
+                    return False
+                self._cond.wait(left)
+            self.used += 1
+            return True
+
+    def release(self):
+        with self._cond:
+            if self.used > 0:
+                self.used -= 1
+            self._cond.notify()
+
+    def set_capacity(self, n):
+        with self._cond:
+            self.capacity = max(1, int(n))
+            self._cond.notify_all()
+
+
+_slots = _SlotPool(MAX_CHILDREN)
+
+
+def set_capacity(n):
+    """Set how many children may be alive at once in this process (>= 1). Called once per phase by the
+    prep pipeline and by main.py; the value comes from resources.plan(...).children. Shrinking only stops
+    new children from starting. Returns the capacity now in force. Never raises."""
+    try:
+        _slots.set_capacity(n)
+        log.info("sandbox: capacity %d child(ren)" % _slots.capacity)
+    except Exception:
+        log.exception("sandbox set_capacity")
+    return _slots.capacity
+
+
+def capacity():
+    return _slots.capacity
 
 
 class SandboxError(Exception):
@@ -126,12 +179,27 @@ class Worker:
         self._q = None
         self._err = bytearray()
         self._has_slot = False
+        self.cpu_used = 0.0          # CPU seconds the child reported with its last answer (its whole life so far)
         self._slot_lock = threading.Lock()
         self._stopped = ""           # reason, when killed from outside (kill_all)
 
     # ------------------------------------------------------------ life cycle
     def alive(self):
         return self.proc is not None and self.proc.poll() is None
+
+    def rss_mb(self):
+        """Resident set of the live child in MB (Linux /proc; 0.0 where that is not available). Never raises."""
+        try:
+            proc = self.proc
+            if proc is None:
+                return 0.0
+            with open("/proc/%d/status" % proc.pid, "r", encoding="ascii", errors="replace") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        return round(int(line.split()[1]) / 1024.0, 1)
+        except Exception:
+            pass
+        return 0.0
 
     def _start(self, deadline):
         wait = (deadline - time.monotonic()) if self.slot_wait_s is None else float(self.slot_wait_s)
@@ -159,6 +227,7 @@ class Worker:
             self._release()
             raise SandboxError("cannot start the sandbox child: %s" % e, "crash")
         self.starts += 1
+        self.cpu_used = 0.0
         self._q = queue.Queue()
         self._err = bytearray()
         threading.Thread(target=self._read_out, args=(self.proc, self._q), daemon=True,
@@ -207,10 +276,7 @@ class Worker:
         with self._slot_lock:            # kill() can come from kill_all() in another thread
             had, self._has_slot = self._has_slot, False
         if had:
-            try:
-                _slots.release()
-            except ValueError:
-                pass
+            _slots.release()
 
     def kill(self, reason=""):
         """Kill the child now (process group), reap it, free its slot. Never raises."""
@@ -301,6 +367,10 @@ class Worker:
         except Exception:
             self.kill()
             raise SandboxError("the sandbox child sent a line that is not a JSON answer", "crash")
+        try:
+            self.cpu_used = float(res.get("cpu") or self.cpu_used)
+        except (TypeError, ValueError):
+            pass
         if not res.get("ok"):
             if res.get("etype") == "MemoryError":
                 self.kill()          # after a MemoryError the child is not trustworthy

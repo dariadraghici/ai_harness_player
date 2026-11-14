@@ -38,6 +38,7 @@ It exits when its stdin closes.
 import json
 import os
 import sys
+import time
 import traceback
 import types
 
@@ -171,6 +172,11 @@ def main():
             where = last_frame(e, state["path"])
             res = {"ok": False, "etype": type(e).__name__,
                    "error": describe(e) + (" (%s)" % where if where else "")}
+        if isinstance(res, dict):
+            try:
+                res["cpu"] = round(time.process_time(), 3)     # this child's CPU seconds so far, for the metrics
+            except Exception:
+                pass
         answer(res)
 
 

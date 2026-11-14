@@ -23,10 +23,13 @@ Owner: luckydevs-1. Standard library only (RULES.md 23, 28).
 import argparse
 import json
 import os
+import queue
 import re
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 # Ensure scripts folder is in sys.path for importing _common
 _SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -90,6 +93,15 @@ def discover_available_games():
     return deduped
 
 
+def percentile(values, pct):
+    """Nearest-rank percentile of a list of numbers; 0.0 for an empty list."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    rank = max(1, int(-(-len(ordered) * pct // 100)))
+    return float(ordered[min(len(ordered), rank) - 1])
+
+
 class MatchResult:
     """Outcome and collected metrics for a single practice match."""
 
@@ -111,6 +123,11 @@ class MatchResult:
         self.error_message = ""
         self.replay_path = ""
         self.duration_s = 0.0
+        # resources of OUR bot in this match (from the turn lines of its metrics file, see bot/metrics.py)
+        self.rss_mb = 0.0            # peak resident set of the bot or of its biggest sandbox child
+        self.children_peak = 0       # most sandbox children seen alive in one turn
+        self.cpu_s = 0.0             # CPU seconds of the bot plus its children, summed over the turns
+        self.workers = 0             # most search workers used in one turn
 
     @property
     def avg_time_s(self):
@@ -139,6 +156,10 @@ class MatchResult:
             "problems": self.problems,
             "error_message": self.error_message,
             "duration_s": round(self.duration_s, 2),
+            "rss_mb": round(self.rss_mb, 1),
+            "children_peak": self.children_peak,
+            "cpu_s": round(self.cpu_s, 2),
+            "workers": self.workers,
         }
 
 
@@ -159,6 +180,9 @@ class AggregateGroup:
         self.all_answer_times = []
         self.total_cost_usd = 0.0
         self.crashes = 0
+        self.rss_mb = 0.0
+        self.children_peak = 0
+        self.total_cpu_s = 0.0
 
     def add_match(self, mr):
         self.matches_completed += 1
@@ -170,6 +194,9 @@ class AggregateGroup:
         self.timeouts += mr.timeouts
         self.all_answer_times.extend(mr.answer_times)
         self.total_cost_usd += mr.cost_usd
+        self.rss_mb = max(self.rss_mb, getattr(mr, "rss_mb", 0.0))
+        self.children_peak = max(self.children_peak, getattr(mr, "children_peak", 0))
+        self.total_cpu_s += getattr(mr, "cpu_s", 0.0)
         if mr.status in ("CRASH", "TIMEOUT") and mr.games_count == 0:
             self.crashes += 1
 
@@ -184,6 +211,18 @@ class AggregateGroup:
     @property
     def cost_per_match(self):
         return (self.total_cost_usd / self.matches_completed) if self.matches_completed else 0.0
+
+    @property
+    def p50_time_s(self):
+        return percentile(self.all_answer_times, 50)
+
+    @property
+    def p99_time_s(self):
+        return percentile(self.all_answer_times, 99)
+
+    @property
+    def cpu_per_match(self):
+        return (self.total_cpu_s / self.matches_completed) if self.matches_completed else 0.0
 
     @property
     def win_pct(self):
@@ -207,12 +246,17 @@ class AggregateGroup:
             "total_cost_usd": round(self.total_cost_usd, 6),
             "cost_per_match": round(self.cost_per_match, 6),
             "crashes": self.crashes,
+            "p50_time_s": round(self.p50_time_s, 3),
+            "p99_time_s": round(self.p99_time_s, 3),
+            "rss_mb": round(self.rss_mb, 1),
+            "children_peak": self.children_peak,
+            "cpu_per_match": round(self.cpu_per_match, 2),
         }
 
 
-def _snapshot_metrics_files():
+def _snapshot_metrics_files(out=None):
     """Record current files and byte positions in memory/luckydevs/metrics."""
-    mdir = os.path.join(OUT, "memory", US, "metrics")
+    mdir = os.path.join(out or OUT, "memory", US, "metrics")
     snap = {}
     if os.path.isdir(mdir):
         for f in os.listdir(mdir):
@@ -222,13 +266,44 @@ def _snapshot_metrics_files():
     return snap
 
 
-def _extract_cost(match_id, snap_before):
+def _extract_perf(snap_before, out=None):
+    """Resources of our bot from the TURN lines added to its metrics files since snap_before:
+    (peak rss MB, most children alive, CPU seconds of the bot plus its children, most search workers)."""
+    rss, kids, cpu, workers = 0.0, 0, 0.0, 0
+    mdir = os.path.join(out or OUT, "memory", US, "metrics")
+    if not os.path.isdir(mdir):
+        return rss, kids, cpu, workers
+    for f in os.listdir(mdir):
+        p = os.path.join(mdir, f)
+        try:
+            if not os.path.isfile(p) or os.path.getsize(p) <= snap_before.get(p, 0):
+                continue
+            with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                fh.seek(snap_before.get(p, 0))
+                for line in fh:
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    if obj.get("kind") != "turn":
+                        continue
+                    rss = max(rss, float(obj.get("rss_mb") or 0.0), float(obj.get("child_rss_mb") or 0.0))
+                    kids = max(kids, int(obj.get("children_peak") or 0), int(obj.get("children") or 0))
+                    cpu += float(obj.get("cpu_s") or 0.0) + float(obj.get("child_cpu_s") or 0.0)
+                    workers = max(workers, int(obj.get("workers") or 0))
+        except Exception:
+            continue
+    return rss, kids, cpu, workers
+
+
+def _extract_cost(match_id, snap_before, out=None):
     """Calculate USD cost for our bot from newly added metrics lines or match log."""
     cost = 0.0
     found_in_metrics = False
+    out = out or OUT
 
     # 1. Inspect newly written lines in memory/luckydevs/metrics/*.jsonl
-    mdir = os.path.join(OUT, "memory", US, "metrics")
+    mdir = os.path.join(out, "memory", US, "metrics")
     if os.path.isdir(mdir):
         for f in os.listdir(mdir):
             p = os.path.join(mdir, f)
@@ -266,7 +341,7 @@ def _extract_cost(match_id, snap_before):
         return cost
 
     # 2. Fallback: Parse token usage from match log: results/practice/logs/<match_id>-luckydevs.log
-    log_path = os.path.join(OUT, "results", "practice", "logs", "%s-%s.log" % (match_id, US))
+    log_path = os.path.join(out, "results", "practice", "logs", "%s-%s.log" % (match_id, US))
     if os.path.isfile(log_path):
         try:
             with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
@@ -371,11 +446,16 @@ def parse_replay_metrics(replay_path, team=US):
 
 
 def run_practice_match(game, opponent, match_index, run_id, fake=True, prep=False,
-                       image=None, match_timeout=180, best_of=1, verbose=False):
-    """Execute one practice match via scripts/practice.py."""
+                       image=None, match_timeout=180, best_of=1, verbose=False, out=None, settings=None):
+    """Execute one practice match via scripts/practice.py.
+
+    out: the ARENA_ROOT of this match (its results/ and memory/); None = the repository root. Parallel
+    workers each get their own, so logs, replays and cached specialists never interleave.
+    settings: ["BOT_X=V", ...] passed to practice.py --set (for example BOT_RESOURCES=off)."""
+    out = out or OUT
     match_id = ("batch-%s-%s-%s-%d" % (run_id, game, opponent, match_index)).lower()
     mr = MatchResult(game, opponent, match_index, match_id)
-    replay_file = os.path.join(OUT, "results", "practice", "matches", "%s.json" % match_id)
+    replay_file = os.path.join(out, "results", "practice", "matches", "%s.json" % match_id)
     mr.replay_path = replay_file
 
     cmd = [
@@ -393,8 +473,14 @@ def run_practice_match(game, opponent, match_index, run_id, fake=True, prep=Fals
         cmd.extend(["--image", image])
     if best_of and best_of > 1:
         cmd.extend(["--games", str(best_of)])
+    for item in settings or []:
+        cmd.extend(["--set", item])
+    env = dict(os.environ)
+    if out != OUT:
+        env["ARENA_ROOT"] = out
+        os.makedirs(out, exist_ok=True)
 
-    snap_before = _snapshot_metrics_files()
+    snap_before = _snapshot_metrics_files(out)
     t0 = time.monotonic()
 
     try:
@@ -404,6 +490,7 @@ def run_practice_match(game, opponent, match_index, run_id, fake=True, prep=Fals
             capture_output=not verbose,
             text=True,
             timeout=match_timeout,
+            env=env,
         )
         mr.duration_s = time.monotonic() - t0
         output_text = (proc.stdout or "") + (proc.stderr or "")
@@ -420,7 +507,8 @@ def run_practice_match(game, opponent, match_index, run_id, fake=True, prep=Fals
         mr.problems.extend(stats["problems"])
 
         # Cost
-        mr.cost_usd = _extract_cost(match_id, snap_before)
+        mr.cost_usd = _extract_cost(match_id, snap_before, out)
+        mr.rss_mb, mr.children_peak, mr.cpu_s, mr.workers = _extract_perf(snap_before, out)
 
         if proc.returncode == 0 and not mr.problems and "RESULT: CLEAN" in output_text:
             mr.status = "CLEAN"
@@ -457,6 +545,11 @@ def format_ascii_table(aggregates, total_matches, total_time_s):
         "Avg (s)",
         "Max (s)",
         "Cost/Match",
+        "p50 (s)",
+        "p99 (s)",
+        "RSS MB",
+        "Kids",
+        "CPU s/match",
     ]
 
     rows = []
@@ -470,6 +563,9 @@ def format_ascii_table(aggregates, total_matches, total_time_s):
     tot_timeouts = 0
     all_times = []
     tot_cost = 0.0
+    tot_rss = 0.0
+    tot_kids = 0
+    tot_cpu = 0.0
 
     for agg in aggregates:
         tot_planned += agg.matches_planned
@@ -482,6 +578,9 @@ def format_ascii_table(aggregates, total_matches, total_time_s):
         tot_timeouts += agg.timeouts
         all_times.extend(agg.all_answer_times)
         tot_cost += agg.total_cost_usd
+        tot_rss = max(tot_rss, agg.rss_mb)
+        tot_kids = max(tot_kids, agg.children_peak)
+        tot_cpu += agg.total_cpu_s
 
         base_games = agg.total_games if agg.total_games > 0 else agg.matches_completed
         win_str = "%d/%d (%d%%)" % (agg.wins, base_games, int(round(agg.win_pct))) if base_games > 0 else "0/0 (0%)"
@@ -497,6 +596,11 @@ def format_ascii_table(aggregates, total_matches, total_time_s):
             ("%.2fs" % agg.avg_time_s) if agg.all_answer_times else "-",
             ("%.2fs" % agg.max_time_s) if agg.all_answer_times else "-",
             cost_str,
+            ("%.2f" % agg.p50_time_s) if agg.all_answer_times else "-",
+            ("%.2f" % agg.p99_time_s) if agg.all_answer_times else "-",
+            ("%.0f" % agg.rss_mb) if agg.rss_mb else "-",
+            str(agg.children_peak) if agg.children_peak else "-",
+            ("%.1f" % agg.cpu_per_match) if agg.total_cpu_s else "-",
         ])
 
     # Total row
@@ -517,6 +621,11 @@ def format_ascii_table(aggregates, total_matches, total_time_s):
         ("%.2fs" % tot_avg_time) if all_times else "-",
         ("%.2fs" % tot_max_time) if all_times else "-",
         "$%.4f" % tot_cost_per_match,
+        ("%.2f" % percentile(all_times, 50)) if all_times else "-",
+        ("%.2f" % percentile(all_times, 99)) if all_times else "-",
+        ("%.0f" % tot_rss) if tot_rss else "-",
+        str(tot_kids) if tot_kids else "-",
+        ("%.1f" % (tot_cpu / tot_completed)) if tot_cpu and tot_completed else "-",
     ]
 
     # Compute column widths
@@ -543,7 +652,7 @@ def format_ascii_table(aggregates, total_matches, total_time_s):
                 out.append(" " + val.ljust(w) + " ")
         return "|" + "|".join(out) + "|"
 
-    aligns = ["left", "left", "right", "right", "right", "right", "right", "right", "right"]
+    aligns = ["left", "left"] + ["right"] * (len(headers) - 2)
 
     lines = [
         "",
@@ -563,8 +672,28 @@ def format_ascii_table(aggregates, total_matches, total_time_s):
     return "\n".join(lines)
 
 
+def host_cpus():
+    try:
+        return len(os.sched_getaffinity(0))
+    except Exception:
+        return os.cpu_count() or 1
+
+
+def resolve_jobs(requested, fake):
+    """Parallel matches. Default: every host CPU but one for fake runs (no budget risk), 1 for real runs.
+    A real-key run is never parallelized: the dev key allows 60 requests per minute for the whole team
+    (RULES 26). Returns (jobs, note)."""
+    cpus = host_cpus()
+    if fake:
+        jobs = requested if requested and requested > 0 else max(1, cpus - 1)
+        return max(1, min(jobs, 64)), ""
+    if requested and requested > 1:
+        return 1, "real dev key: --jobs %d refused, running one match at a time (60 requests per minute)" % requested
+    return 1, ""
+
+
 def run_batch(games, opponents, n_matches, fake=True, prep=False, image=None,
-              match_timeout=180, best_of=1, output_file=None, verbose=False):
+              match_timeout=180, best_of=1, output_file=None, verbose=False, jobs=1, settings=None):
     """Run all matches in the batch and print summary table."""
     run_id = time.strftime("%Y%m%d-%H%M%S")
     print("=" * 78)
@@ -579,6 +708,9 @@ def run_batch(games, opponents, n_matches, fake=True, prep=False, image=None,
         print("  Image ref    : %s" % image_ref(image))
     total_planned = len(games) * len(opponents) * n_matches
     print("  Total planned: %d matches" % total_planned)
+    print("  Parallel jobs: %d" % jobs)
+    if settings:
+        print("  Bot settings : %s" % " ".join(settings))
     print("=" * 78, flush=True)
 
     # Initialize aggregators
@@ -590,43 +722,49 @@ def run_batch(games, opponents, n_matches, fake=True, prep=False, image=None,
             groups[(g, opp)] = agg
 
     match_results = []
-    current_index = 0
     t_start = time.monotonic()
+    plan = [(g, opp, idx) for g in games for opp in opponents for idx in range(1, n_matches + 1)]
+    lock = threading.Lock()
+    slots = queue.Queue()
+    for k in range(max(1, jobs)):
+        slots.put(k)
+    counter = [0]
+
+    def play(item):
+        g, opp, idx = item
+        k = slots.get()
+        try:
+            out = None if jobs <= 1 else os.path.join(REPO, "results", "batch", run_id, "w%d" % k)
+            return run_practice_match(game=g, opponent=opp, match_index=idx, run_id=run_id, fake=fake, prep=prep,
+                                      image=image, match_timeout=match_timeout, best_of=best_of, verbose=verbose,
+                                      out=out, settings=settings)
+        finally:
+            slots.put(k)
+
+    def report(item, mr):
+        g, opp, idx = item
+        with lock:
+            counter[0] += 1
+            match_results.append(mr)
+            groups[(g, opp)].add_match(mr)
+            if verbose:
+                return
+            extra = "wins=%d/%d, warn=%d, to=%d, cost=$%.4f in %.1fs" % (
+                mr.wins, mr.games_count, mr.warnings, mr.timeouts, mr.cost_usd, mr.duration_s)
+            print("[%d/%d] %s vs %s (#%d) ... %s (%s)" % (counter[0], total_planned, g, opp, idx, mr.status, extra),
+                  flush=True)
+            for prob in mr.problems:
+                print("    - %s" % prob, flush=True)
 
     try:
-        for g in games:
-            for opp in opponents:
-                for idx in range(1, n_matches + 1):
-                    current_index += 1
-                    prefix = "[%d/%d] %s vs %s (#%d)" % (current_index, total_planned, g, opp, idx)
-                    if not verbose:
-                        sys.stdout.write("%s ... " % prefix)
-                        sys.stdout.flush()
-
-                    mr = run_practice_match(
-                        game=g,
-                        opponent=opp,
-                        match_index=idx,
-                        run_id=run_id,
-                        fake=fake,
-                        prep=prep,
-                        image=image,
-                        match_timeout=match_timeout,
-                        best_of=best_of,
-                        verbose=verbose,
-                    )
-                    match_results.append(mr)
-                    groups[(g, opp)].add_match(mr)
-
-                    if not verbose:
-                        status_str = mr.status
-                        extra = "wins=%d/%d, warn=%d, to=%d, cost=$%.4f in %.1fs" % (
-                            mr.wins, mr.games_count, mr.warnings, mr.timeouts, mr.cost_usd, mr.duration_s)
-                        print("%s (%s)" % (status_str, extra), flush=True)
-                        if mr.problems:
-                            for p in mr.problems:
-                                print("    - %s" % p, flush=True)
-
+        if jobs <= 1:
+            for item in plan:
+                report(item, play(item))
+        else:
+            with ThreadPoolExecutor(max_workers=jobs, thread_name_prefix="batch") as pool:
+                futures = [(item, pool.submit(play, item)) for item in plan]
+                for item, fut in futures:
+                    report(item, fut.result())
     except KeyboardInterrupt:
         print("\n\n[!] Batch interrupted by user (Ctrl+C). Generating partial results table...\n", flush=True)
 
@@ -648,6 +786,8 @@ def run_batch(games, opponents, n_matches, fake=True, prep=False, image=None,
                     "prep": prep,
                     "image": image,
                     "best_of": best_of,
+                    "jobs": jobs,
+                    "bot_settings": settings or [],
                 },
                 "aggregates": [agg.to_dict() for agg in groups.values()],
                 "matches": [mr.to_dict() for mr in match_results],
@@ -693,6 +833,11 @@ def build_arg_parser():
                    help="Optional JSON file path to write structured results")
     p.add_argument("-v", "--verbose", action="store_true", default=False,
                    help="Stream full arena-lite output for each match")
+    p.add_argument("--jobs", type=int, default=0,
+                   help="Matches in parallel. Default: host CPUs - 1 with --fake, 1 with the real key "
+                        "(never parallel: the dev key allows 60 requests per minute for the whole team)")
+    p.add_argument("--set", action="append", default=[], metavar="BOT_X=V",
+                   help="Bot setting passed to every match (repeatable), e.g. --set BOT_RESOURCES=off")
     p.add_argument("--dry-run", action="store_true", default=False,
                    help="Discover games and display execution plan without running")
     return p
@@ -747,9 +892,14 @@ def main(argv=None):
         print("  Fake LLM        : %s" % fake_mode)
         print("  Prep            : %s" % args.prep)
         print("  Image           : %s" % (args.image or "local python"))
+        print("  Parallel jobs   : %d" % resolve_jobs(args.jobs, fake_mode)[0])
         return 0
 
+    jobs, note = resolve_jobs(args.jobs, fake_mode)
+    if note:
+        print(note, file=sys.stderr)
     return run_batch(
+        jobs=jobs, settings=list(args.set),
         games=selected_games,
         opponents=opp_list,
         n_matches=args.matches,

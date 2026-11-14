@@ -34,7 +34,7 @@ choose among them, and the others keep their lower mean.
 import os
 import time
 
-from .. import config, log, memory
+from .. import config, log, memory, resources
 from ..interfaces import Candidate
 from . import base
 
@@ -62,17 +62,114 @@ def load_cache(spec):
     return out
 
 
-def save_root(spec, key, values):
-    """Add one solved root. Read-modify-write; a lost update only loses a cache entry."""
+def save_root(spec, key, values, limit=None):
+    """Add one solved root. Read-modify-write; a lost update only loses a cache entry.
+
+    limit: roots kept (newest last); None = what the resource plan allows (CACHE_MAX_ROOTS, more in prep)."""
     try:
+        limit = max(CACHE_MAX_ROOTS, int(limit or resources.plan("turn_search").cache_roots))
         sha = base.sim_sha(spec)
         d = memory.read_json(cache_path(spec), {})
         roots = d.get("roots") if isinstance(d, dict) and d.get("sim") == sha else []
         roots = [r for r in (roots or []) if isinstance(r, list) and r and r[0] != key]
         roots.append([key, values])
-        memory.write_json_atomic(cache_path(spec), {"sim": sha, "roots": roots[-CACHE_MAX_ROOTS:]})
+        out = {"sim": sha, "roots": roots[-limit:]}
+        if isinstance(d, dict) and d.get("sim") == sha and d.get("presolved"):
+            out["presolved"] = d["presolved"]          # prep's marker (bot/prep/solve.py) survives the match
+        memory.write_json_atomic(cache_path(spec), out)
     except Exception:
         log.exception("search: cannot save the solved root")
+
+
+def _merge_alphabeta(results):
+    acts, seen = [], set()
+    for r in results:                                    # part order: ties keep the order of the parts
+        for a in r.get("actions") or []:
+            if a["action"] not in seen:
+                seen.add(a["action"])
+                acts.append(dict(a))
+    acts.sort(key=lambda a: (-a["value"], a.get("bound") is not None, a.get("i", 0)))
+    out = dict(results[0])
+    exact = [a["value"] for a in acts if a.get("bound") is None]
+    out.update(actions=acts, solved=all(bool(r.get("solved")) for r in results),
+               depth=min(int(r.get("depth") or 0) for r in results),
+               nodes=sum(int(r.get("nodes") or 0) for r in results),
+               playouts=sum(int(r.get("playouts") or 0) for r in results),
+               best_value=max(a["value"] for a in acts), best_exact=max(exact or [-1.0]))
+    known = {}
+    for r in results:
+        known.update(r.get("known") or {})
+    out["known"] = known
+    return out
+
+
+def _merge_mcts(results):
+    """Root parallelism: every part ran MCTS over (nearly) the same moves with its own random numbers. Visits add up,
+    means are visit-weighted, variances are pooled; a move that any part PROVED lost stays lost."""
+    lost, stats, order, idx = {}, {}, [], {}
+    for r in results:
+        for a in r.get("actions") or []:
+            name = a["action"]
+            idx.setdefault(name, a.get("i", 0))
+            if name not in order:
+                order.append(name)
+            if a.get("lost_in"):
+                lost[name] = a["lost_in"]
+            elif a.get("visits"):
+                stats.setdefault(name, []).append((int(a["visits"]), float(a["mean"]), float(a["se"])))
+    rows = []
+    for name, parts in stats.items():
+        if name in lost:
+            continue
+        n = sum(p[0] for p in parts)
+        mean = sum(p[0] * p[1] for p in parts) / n
+        var = sum(p[0] * (p[2] ** 2 * p[0] + (p[1] - mean) ** 2) for p in parts) / n
+        rows.append({"action": name, "mean": mean, "n": n, "se": (var / n) ** 0.5, "i": idx.get(name, 0)})
+    if not rows:
+        return results[0]
+    best = max(rows, key=lambda x: (x["n"], x["mean"], -x["i"]))
+    acts = []
+    for x in sorted(rows, key=lambda x: (-x["n"], -x["mean"], x["i"])):
+        gap = best["mean"] - x["mean"]
+        tied = x is best or gap < 2.0 * (x["se"] ** 2 + best["se"] ** 2) ** 0.5
+        acts.append({"action": x["action"], "value": best["mean"] if tied else min(x["mean"], best["mean"]),
+                     "bound": None, "visits": x["n"], "mean": x["mean"], "se": x["se"],
+                     "tied": bool(tied and x is not best)})
+    for name in order:
+        if name not in stats or name in lost:
+            acts.append({"action": name, "value": -1.0 if name in lost else max(-1.0, best["mean"] - 1.0),
+                         "bound": None, "visits": 0, "lost_in": lost.get(name)})
+    out = dict(results[0])
+    ab = [r for r in results if r.get("algo") == "alphabeta+mcts"]
+    out.update(algo="alphabeta+mcts" if len(ab) == len(results) else "mcts", actions=acts,
+               best_value=best["mean"], playouts=sum(int(r.get("playouts") or 0) for r in results),
+               depth=min([int(r.get("depth") or 0) for r in ab] or [0]),
+               nodes=sum(int(r.get("nodes") or 0) for r in results), solved=False)
+    known = {}
+    for r in results:
+        known.update(r.get("known") or {})
+    out["known"] = known
+    return out
+
+
+def merge_results(results):
+    """Merge the ok results of the parts of one search (given in part order). A function of the results only."""
+    results = [r for r in results if r.get("actions")]
+    if not results:
+        return {"ok": False, "live": True, "reason": "no part produced an action"}
+    if len(results) == 1:
+        return results[0]
+    if all(r.get("algo") in ("cache", "single") for r in results):
+        return results[0]
+    ab = [r for r in results if r.get("algo") == "alphabeta"]
+    mc = [r for r in results if r.get("algo") in ("mcts", "alphabeta+mcts")]
+    if len(ab) == len(results):
+        return _merge_alphabeta(results)
+    if len(mc) == len(results):
+        return _merge_mcts(results)
+    if any(a.get("value", 0) >= 0.999 and a.get("bound") is None for r in ab for a in r["actions"]):
+        return _merge_alphabeta(ab)                      # a proven win in one part beats every estimate
+    return _merge_mcts(mc) if mc else _merge_alphabeta(ab)
 
 
 def _name(v):
@@ -82,6 +179,15 @@ def _name(v):
 class SearchEngine(base.SimEngine):
     family = "think_ahead"
     job_file = JOB_FILE
+    splittable = True
+
+    def merge(self, results, payload):
+        return merge_results(results)
+
+    def decisive(self, result):
+        """A proven win (alpha-beta, exact, no bound): the sequential search stops there as well."""
+        return result.get("algo") == "alphabeta" and any(
+            a.get("value", 0.0) >= 0.999 and a.get("bound") is None for a in result.get("actions") or [])
 
     def payload(self, spec, turn_msg, game):
         return {"leaf_k": LEAF_PLAYOUTS, "known": game.known, "cache": load_cache(spec)}
@@ -93,7 +199,8 @@ class SearchEngine(base.SimEngine):
         if isinstance(res.get("known"), dict):
             game.known = res["known"]
         algo, solved = res.get("algo"), bool(res.get("solved"))
-        if solved and algo == "alphabeta" and res.get("root_key") and all(a.get("bound") is None for a in acts):
+        if solved and algo == "alphabeta" and res.get("root_key") and all(a.get("bound") is None for a in acts) \
+                and len(acts) == res.get("branching", len(acts)):
             save_root(spec, res["root_key"], {a["action"]: a["value"] for a in acts})
         out = []
         for a in acts[:MAX_CANDIDATES]:

@@ -39,7 +39,7 @@ import zlib
 BIG = 10 ** 9
 INF = float("inf")
 EXACT, LOWER, UPPER = 0, 1, 2
-TT_CAP = 350000
+TT_CAP = 350000           # default; the payload may carry "tt_entries" (bot/resources.py sizes it from the child's memory)
 KNOWN_CAP = 3000
 EXPORT_NODES = 2500
 UCT_C = 1.0
@@ -71,8 +71,9 @@ class Unsupported(Exception):
 # ---------------------------------------------------------------- alpha-beta
 class AlphaBeta:
 
-    def __init__(self, g, clock, known, leaf_k):
+    def __init__(self, g, clock, known, leaf_k, cap=TT_CAP):
         self.g = g
+        self.cap = int(cap)
         self.clock = clock
         self.leaf_k = leaf_k
         self.tt = {}
@@ -98,7 +99,7 @@ class AlphaBeta:
         old = self.tt.get(key)
         if old is not None and old[0] > edepth:
             return
-        if old is None and len(self.tt) >= TT_CAP and not (edepth == BIG and flag == EXACT):
+        if old is None and len(self.tt) >= self.cap and not (edepth == BIG and flag == EXACT):
             return
         self.tt[key] = (edepth, flag, val, h, best)
 
@@ -171,7 +172,8 @@ class AlphaBeta:
 
 def alpha_beta(g, state, la, clock, payload):
     margin = float(payload.get("margin") or 0.05)
-    ab = AlphaBeta(g, clock, payload.get("known"), int(payload.get("leaf_k") or 0))
+    ab = AlphaBeta(g, clock, payload.get("known"), int(payload.get("leaf_k") or 0),
+                   max(1000, int(payload.get("tt_entries") or TT_CAP)))
     order = list(la)
     done, depth, solved = None, 1, False
     while depth <= 400:
@@ -392,6 +394,18 @@ def calibrate(g, state, la, rng, limit_s=0.1):
     return per_node, branching / float(max(1, n)), zero_sum
 
 
+def _part(payload):
+    """(index, count) of this part when several children search the same position, else (0, 1)."""
+    try:
+        parts = max(1, int(payload.get("parts") or 1))
+        part = int(payload.get("part") or 0)
+        if 0 <= part < parts:
+            return part, parts
+    except (TypeError, ValueError):
+        pass
+    return 0, 1
+
+
 def run(sim, payload):
     if sim is None:
         return {"ok": False, "reason": "no simulator loaded"}
@@ -400,7 +414,9 @@ def run(sim, payload):
     if g is None:
         return {"ok": False, "live": False, "reason": reason}
     la = g.legal(state)
-    rng = random.Random(zlib.crc32(C.dump(payload.get("observation", "")).encode("utf-8")))
+    part, parts = _part(payload)
+    # part 0 of 1 is exactly the sequential search; part i of n draws its own random numbers (root parallelism)
+    rng = random.Random(zlib.crc32(C.dump(payload.get("observation", "")).encode("utf-8")) + part)
     try:
         root_key = g.key(state)
         cached = (payload.get("cache") or {}).get(root_key)
@@ -421,7 +437,12 @@ def run(sim, payload):
             use_mcts = depth2 > 0.5 * clock.left()
         out = None
         if not use_mcts:
-            out = alpha_beta(g, state, la, C.Clock(AB_SHARE * clock.left()), payload)
+            mine = la[part::parts]            # root split: this part searches its share of the root moves
+            if not mine:
+                return {"ok": True, "live": True, "algo": "none", "solved": False, "depth": 0, "nodes": 0,
+                        "playouts": 0, "actions": [], "best_value": 0.0, "root_key": root_key,
+                        "branching": len(la), "zero_sum": zero_sum}
+            out = alpha_beta(g, state, mine, C.Clock(AB_SHARE * clock.left()), payload)
             if out is not None and not out["solved"] and out["best_value"] < 1.0 - 1e-9:
                 out = refine(g, state, la, clock, payload, rng, out)
         if out is None:
@@ -431,6 +452,9 @@ def run(sim, payload):
         ab = out.pop("_ab", None)
         if ab is not None:
             out["known"] = export_known(g, ab, state, C.Clock(min(0.1, max(0.0, 0.5 * clock.left()))))
+        idx = dict((a, i) for i, a in enumerate(la))
+        for x in out.get("actions") or []:
+            x["i"] = idx.get(x["action"], 0)          # position in the legal list: a stable tie-break for merges
         out["live"] = True
         out["root_key"] = root_key
         out["zero_sum"] = zero_sum

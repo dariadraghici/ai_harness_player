@@ -23,7 +23,21 @@ order, and NEVER raises:
      (verify.is_done reads it);
   5. the job's answer becomes list[Candidate].
 
-No child is alive after candidates() returns. Opponent chat, and anything
+Children (bot/resources.py decides the numbers; BOT_RESOURCES=off gives the old behavior: one fresh
+child per turn, killed on return):
+  * WARM WORKER: one sandbox child per (family, game, part) stays alive while a game is being played
+    and is reused for every turn (the start plus the load of the simulator is paid once). The live check
+    still runs in every job: reusing the child does not mean trusting the simulator longer. Warm
+    children are killed at `end`, when the container goes idle (shutdown_workers) and by an idle
+    watchdog when one has not been used for longer than a move clock. If a warm child is busy (a late
+    thread of a turn the watchdog already answered), the new turn uses a fresh child instead.
+  * PARALLEL PARTS: an engine that can split its decision (think_ahead: root split, guessing: share of
+    the actions) runs `search_workers` children with the SAME slice, so parallelism buys resolution and
+    not wall clock. The results are merged in PART order (never in arrival order), so the merged
+    candidates are a function of the results; a part that fails or times out is dropped and the others
+    still answer.
+
+No child is alive once the game is over or the container is idle. Opponent chat, and anything
 derived from it, never goes into a job payload: the model sees the candidates
 AND the chat and makes the one decision.
 """
@@ -33,7 +47,7 @@ import threading
 import time
 from typing import Dict, List, Optional
 
-from .. import config, log, memory
+from .. import config, log, memory, resources
 from ..interfaces import Candidate, Engine, VariantSpec  # noqa: F401  (re-exported)
 
 # ---------------------------------------------------------------- constants (proposed for bot/config.py)
@@ -46,6 +60,103 @@ SLICE_BACKSTOP_S = 1.5           # the parent kills the child this long after th
 L3_DEFAULT = "think_ahead,guessing,read_opponent"
 L3_ALL = ("think_ahead", "guessing", "read_opponent", "bluff")
 JOB_ERRORS_OFF = 2               # simulator exceptions in jobs before "off for this game"
+WARM_CPU_S = 900                 # CPU backstop of a warm child (it lives for a whole game, not for one slice)
+WARM_IDLE_MIN_S = 25.0           # a warm child unused for longer than max(this, move clock + 5) is killed
+WARM_WATCH_PERIOD_S = 2.0
+
+# What the last candidates() call did, for the metrics line: workers used, warm or fresh, children alive.
+LAST_RUN: Dict[str, object] = {}
+
+
+# ---------------------------------------------------------------- warm workers (one registry per process)
+class _Warm:
+    __slots__ = ("worker", "sha", "last", "idle_s", "busy")
+
+    def __init__(self, worker, sha, idle_s):
+        self.worker, self.sha, self.idle_s = worker, sha, idle_s
+        self.last = time.monotonic()
+        self.busy = threading.Lock()
+
+
+_warm: Dict[tuple, _Warm] = {}
+_warm_lock = threading.Lock()
+_warm_thread = None
+
+
+def warm_count():
+    with _warm_lock:
+        return len(_warm)
+
+
+def _close_all(entries):
+    for e in entries:
+        try:
+            e.worker.close()
+        except Exception:
+            log.exception("warm worker close")
+
+
+def drop_workers(match=None):
+    """Close the warm workers whose key satisfies match(key) (all when None). Returns how many."""
+    with _warm_lock:
+        keys = [k for k in _warm if match is None or match(k)]
+        entries = [_warm.pop(k) for k in keys]
+    _close_all(entries)
+    return len(entries)
+
+
+def shutdown_workers():
+    """Kill every warm worker of this process: at `end`, when the container goes idle, at shutdown."""
+    n = drop_workers()
+    if n:
+        log.info("engines: %d warm worker(s) closed" % n)
+    return n
+
+
+def _warm_watch():
+    global _warm_thread
+    while True:
+        time.sleep(WARM_WATCH_PERIOD_S)
+        now = time.monotonic()
+        with _warm_lock:
+            stale = [k for k, e in _warm.items() if not e.busy.locked() and now - e.last > e.idle_s]
+            entries = [_warm.pop(k) for k in stale]
+            if not _warm:
+                _warm_thread = None
+                done = True
+            else:
+                done = False
+        if entries:
+            log.info("engines: %d idle warm worker(s) closed" % len(entries))
+            _close_all(entries)
+        if done:
+            return          # no warm worker, no timer loop: an idle specialist costs nothing
+
+
+def _warm_get(key, path, sha, mem_mb, idle_s):
+    """The warm entry for key, created if needed (replaced when the simulator changed)."""
+    global _warm_thread
+    from ..prep import sandbox
+    old = None
+    with _warm_lock:
+        e = _warm.get(key)
+        # Replaced only when the simulator changed. NOT when the plan's memory figure moved: the figure shrinks as
+        # the warm children themselves raise the memory in use, and a worker rebuilt every turn is no warm worker.
+        if e is not None and (e.sha != sha or e.worker.path != os.path.abspath(path)):
+            if e.busy.locked():
+                return None
+            old = _warm.pop(key)
+            e = None
+        if e is None:
+            e = _Warm(sandbox.Worker(path, mem_mb=mem_mb, cpu_s=WARM_CPU_S, name="warm-%s" % (key[0],)), sha, idle_s)
+            _warm[key] = e
+        e.idle_s = idle_s
+        if _warm_thread is None:
+            _warm_thread = threading.Thread(target=_warm_watch, name="warm-watch", daemon=True)
+            _warm_thread.start()
+    if old is not None:
+        _close_all([old])
+    return e
 
 
 class NotAvailable(Exception):
@@ -105,6 +216,13 @@ class SimEngine(BaseEngine):
     def build(self, result: dict, spec, turn_msg, game: _Game) -> List[Candidate]:
         raise NotImplementedError
 
+    # ---- parallel parts: an engine that can split its decision sets splittable and implements merge()
+    splittable = False
+
+    def merge(self, results: List[dict], payload: dict) -> dict:
+        """Merge the ok results of several parts (given in PART order, never arrival order) into one."""
+        return results[0]
+
     # ---- bookkeeping
     def game_for(self, spec, turn_msg) -> _Game:
         key = (spec.game_id, spec.rules_hash)
@@ -116,6 +234,7 @@ class SimEngine(BaseEngine):
                 new = True                    # the turn counter went back: a new game
             if new:
                 if g is not None:
+                    drop_workers(lambda k, fam=self.family, kk=key: k[0] == fam and k[1:3] == tuple(kk))
                     try:
                         self.game_ended(key, g)
                     except Exception:
@@ -134,6 +253,7 @@ class SimEngine(BaseEngine):
     def reset(self):
         with self._lock:
             self._games.clear()
+        drop_workers(lambda k, fam=self.family: k[0] == fam)
 
     def _count(self, spec, game, ok):
         if game.counted:
@@ -141,6 +261,98 @@ class SimEngine(BaseEngine):
         game.counted = True
         from ..prep import verify
         verify.note_live(spec, ok, sim_sha(spec))
+
+    # ---- running the job: one child, or several parts in parallel, warm or fresh
+    def decisive(self, result: dict) -> bool:
+        """True when this result settles the decision, so that the other parts need not run on (think_ahead: a
+        proven win; the sequential search stops there too). The others are killed and their children restart
+        on demand."""
+        return False
+
+    def _run_one(self, spec, path, payload, timeout, part, parts, warm, plan, budget, clock, handles=None, cancel=None):
+        """One part. Returns the shape sandbox.run_job returns. Never raises. handles[part] receives the Worker
+        in use, so that a decisive part can stop the others."""
+        from ..prep import sandbox
+        t0 = time.monotonic()
+        pl = dict(payload)
+        if parts > 1:
+            pl["part"], pl["parts"] = part, parts
+        entry = None
+        if warm:
+            key = (self.family, spec.game_id, spec.rules_hash, part)
+            entry = _warm_get(key, path, sim_sha(spec), plan.child_mem_mb, max(WARM_IDLE_MIN_S, clock + 5.0))
+            if entry is not None and not entry.busy.acquire(blocking=False):
+                entry = None                 # a late thread of an earlier turn still uses it: fresh child
+        if entry is None and parts <= 1:
+            return sandbox.run_job(path, self.job_file, pl, timeout, mem_mb=plan.child_mem_mb,
+                                   cpu_s=int(budget * 3 + 20))
+        fresh = None
+        if entry is None:                    # several parts without a warm child: one fresh child per part
+            fresh = sandbox.Worker(path, mem_mb=plan.child_mem_mb, cpu_s=int(budget * 3 + 20))
+        worker = entry.worker if entry is not None else fresh
+        if handles is not None:
+            handles[part] = worker
+        cpu0 = worker.cpu_used
+        try:
+            if cancel is not None and cancel.is_set():       # another part settled the decision before this one began
+                return {"ok": False, "kind": "cancelled", "error": "stopped: another part settled the decision"}
+            res = worker.job(self.job_file, pl, timeout)
+            return {"ok": True, "result": res, "seconds": round(time.monotonic() - t0, 3)}
+        except sandbox.SandboxError as e:
+            return {"ok": False, "error": str(e), "kind": e.kind, "etype": e.etype,
+                    "seconds": round(time.monotonic() - t0, 3)}
+        except Exception as e:
+            log.exception("engine worker failed unexpectedly")
+            worker.kill()
+            return {"ok": False, "error": "%s: %s" % (type(e).__name__, e), "kind": "crash", "etype": "",
+                    "seconds": round(time.monotonic() - t0, 3)}
+        finally:
+            if fresh is not None:
+                fresh.close()
+            if entry is not None:
+                entry.last = time.monotonic()
+                # a warm child is not reaped, so RUSAGE_CHILDREN cannot see its CPU: it reports its own with each answer
+                delta = worker.cpu_used - cpu0 if worker.cpu_used >= cpu0 else worker.cpu_used
+                with _warm_lock:
+                    LAST_RUN["warm_cpu_s"] = round(float(LAST_RUN.get("warm_cpu_s") or 0.0) + max(0.0, delta), 3)
+                    LAST_RUN["child_rss_mb"] = max(float(LAST_RUN.get("child_rss_mb") or 0.0), worker.rss_mb())
+                entry.busy.release()
+
+    def _run_parts(self, spec, path, payload, timeout, parts, warm, plan, budget, clock):
+        """Outcomes in PART order (None for a part that never answered). Every child has the same slice. A part
+        whose result is decisive stops the others at once (their outcome is then {"kind": "cancelled"})."""
+        if parts <= 1:
+            return [self._run_one(spec, path, payload, timeout, 0, 1, warm, plan, budget, clock)]
+        outcomes = [None] * parts
+        handles = [None] * parts
+        cancel = threading.Event()
+
+        def one(i):
+            try:
+                out = self._run_one(spec, path, payload, timeout, i, parts, warm, plan, budget, clock, handles, cancel)
+                if cancel.is_set() and not out.get("ok"):
+                    out = {"ok": False, "kind": "cancelled", "error": "stopped: another part settled the decision"}
+                outcomes[i] = out
+                if out.get("ok") and isinstance(out.get("result"), dict) and self.decisive(out["result"]) \
+                        and not cancel.is_set():
+                    cancel.set()
+                    for j, w in enumerate(handles):
+                        if j != i and w is not None:
+                            w.kill("decisive")
+            except Exception:
+                log.exception("engine part %d failed" % i)
+
+        threads = [threading.Thread(target=one, args=(i,), name="engine-part-%d" % i, daemon=True)
+                   for i in range(parts)]
+        for t in threads:
+            t.start()
+        end = time.monotonic() + timeout + 1.0
+        for t in threads:
+            t.join(max(0.0, end - time.monotonic()))
+        for i, t in enumerate(threads):
+            if t.is_alive() and outcomes[i] is None:
+                outcomes[i] = {"ok": False, "kind": "timeout", "error": "part %d did not answer in time" % i}
+        return outcomes
 
     # ---- the one entry point
     def candidates(self, specialist, turn_msg, deadline):
@@ -170,7 +382,9 @@ class SimEngine(BaseEngine):
             return []
         clock = turn_msg.get("seconds")
         clock = float(clock) if isinstance(clock, (int, float)) and clock > 0 else float(config.TURN_CLOCK_S)
-        budget = min(SLICE_FRACTION * clock, deadline - time.monotonic() - 0.4)
+        plan = resources.plan("turn_search")
+        fraction = plan.slice_fraction or SLICE_FRACTION     # BOT_SLICE_FRACTION, else the engine's default
+        budget = min(fraction * clock, deadline - time.monotonic() - 0.4)
         if budget < SLICE_MIN_S:
             log.info("%s engine: no time (%.2fs)" % (self.family, budget))
             return []
@@ -178,7 +392,8 @@ class SimEngine(BaseEngine):
         payload = {"observation": str(turn_msg.get("observation") or ""),
                    "legal_actions": [str(a) for a in legal] if isinstance(legal, list) and legal else None,
                    "variant": {"label": spec.label}, "budget_s": round(budget, 3),
-                   "margin": config.CANDIDATE_MARGIN, "family": self.family}
+                   "margin": config.CANDIDATE_MARGIN, "family": self.family,
+                   "tt_entries": plan.tt_entries, "samples_scale": plan.samples_scale}
         seat = turn_msg.get("seat") if turn_msg.get("seat") in (0, 1) else getattr(spec, "seat", None)
         if seat in (0, 1):
             payload["seat"] = seat           # else the job tries both seats and needs the observation to decide
@@ -188,17 +403,45 @@ class SimEngine(BaseEngine):
                        legal_complete=facts["legal_complete"])
         payload.update(self.payload(spec, turn_msg, game))
         timeout = min(budget + SLICE_BACKSTOP_S, max(0.5, deadline - time.monotonic()))
-        out = sandbox.run_job(path, self.job_file, payload, timeout, cpu_s=int(budget * 3 + 20))
-        if not out.get("ok"):
+        from ..prep import sandbox as _sb
+        workers = max(1, min(plan.search_workers, _sb.capacity())) if self.splittable else 1
+        warm = bool(plan.warm_worker)
+        t_job = time.monotonic()
+        outcomes = self._run_parts(spec, path, payload, timeout, workers, warm, plan, budget, clock)
+        LAST_RUN.update(family=self.family, workers=workers, warm=warm, job_s=round(time.monotonic() - t_job, 3),
+                        children=_sb.live_count(), ok=sum(1 for o in outcomes if o and o.get("ok")))
+        good = [o for o in outcomes if o and o.get("ok")]
+        if not good:
+            out = next((o for o in outcomes if o), {"ok": False, "kind": "crash", "error": "no outcome"})
             game.errors += 1
             log.warning("%s engine: job failed (%s): %s" % (self.family, out.get("kind"), str(out.get("error"))[:200]))
             if game.errors >= JOB_ERRORS_OFF or out.get("kind") == "error":
                 game.off, game.reason = True, "the simulator failed inside the engine job"
                 self._count(spec, game, False)
             return []
-        res = out.get("result")
-        if not isinstance(res, dict):
+        if len(good) < len(outcomes):
+            bad = [o for o in outcomes if not (o and o.get("ok"))]
+            real = [o for o in bad if (o or {}).get("kind") != "cancelled"]
+            if real:
+                log.warning("%s engine: %d of %d parts failed (%s), using the others" % (
+                    self.family, len(real), len(outcomes), real[0].get("kind")))
+            else:
+                log.info("%s engine: a proven result from one part stopped the others" % self.family)
+        results = [o.get("result") for o in good if isinstance(o.get("result"), dict)]
+        if not results:
             return []
+        dead = next((r for r in results if r.get("live") is False), None)
+        res = dead
+        if res is None:
+            usable_results = [r for r in results if r.get("ok")]
+            if len(usable_results) > 1:
+                try:
+                    res = self.merge(usable_results, payload)
+                except Exception:
+                    log.exception("%s engine: merge failed, using the first part" % self.family)
+                    res = usable_results[0]
+            else:
+                res = usable_results[0] if usable_results else results[0]
         if res.get("live") is False:
             game.off, game.reason = True, "live check failed: %s" % res.get("reason")
             log.warning("%s engine OFF for this game: %s" % (self.family, game.reason))

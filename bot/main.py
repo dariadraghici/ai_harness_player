@@ -29,7 +29,8 @@ def run():
     import threading
     import time
 
-    from . import clock, config, ladder, llm, log, memory, metrics, opponents, specialist
+    from . import clock, config, ladder, llm, log, memory, metrics, opponents, resources, specialist
+    from .engines import base as engines_base
     from .chat import decide, defense
     from .interfaces import VariantSpec
     from .prep import pipeline
@@ -67,6 +68,8 @@ def run():
                 finally:
                     self.q.put(("done", req))
             req.t0 = time.monotonic()
+            req.perf0 = metrics.perf_start()
+            req.timing = {}
             self.pending = req
             threading.Thread(target=work, name="worker-" + req.type, daemon=True).start()
 
@@ -86,6 +89,8 @@ def run():
             if by_watchdog:
                 log.warning("watchdog answered %s (%s) after %.2fs" % (
                     req.type, source, time.monotonic() - req.t0))
+            if req.type == "prep":
+                resources.enter("idle")          # prep is over: no child alive, no warm cache, until the next start
             if req.answer(obj):
                 elapsed = time.monotonic() - req.t0
                 info = getattr(req, "info", {}) or {}
@@ -94,7 +99,9 @@ def run():
                                game_index=req.msg.get("game_index"), turn=req.msg.get("turn"),
                                level=info.get("level"), why=info.get("why"),
                                elapsed=round(elapsed, 3), watchdog=by_watchdog, source=source,
-                               warning=bool(req.msg.get("warning")), llm=llm.usage())
+                               warning=bool(req.msg.get("warning")), llm=llm.usage(),
+                               **metrics.perf_fields(getattr(req, "perf0", None), getattr(req, "timing", None),
+                                                     dict(engines_base.LAST_RUN) if req.type == "turn" else None))
 
         def fallback(self, req):
             if req.type == "prep":
@@ -112,6 +119,7 @@ def run():
             self.prepared = True
             self.prep_study_seconds = msg.get("study_seconds")
             self.prep_move_seconds = msg.get("move_seconds")
+            resources.enter("prep")
             t0 = time.monotonic()
             req = protocol.Request(msg, clock.prep_hard(msg, t0))
 
@@ -122,6 +130,7 @@ def run():
 
         def on_start(self, msg):
             llm.set_key(msg.get("llm"))           # switch the key first
+            resources.enter("turn")
             t0 = time.monotonic()
             self.start_msg = msg
             self.move_seconds = msg.get("move_seconds") or self.prep_move_seconds
@@ -149,6 +158,9 @@ def run():
             self.spawn(req, work)
 
         def on_turn(self, msg):
+            if resources.phase() != "turn":
+                resources.enter("turn")
+            engines_base.LAST_RUN.clear()
             t0 = time.monotonic()
             req = protocol.Request(msg, clock.turn_hard(msg, t0, self.move_seconds))
             spec, start_msg = self.spec, self.start_msg
@@ -158,7 +170,7 @@ def run():
                 req.info = {"level": d.level, "why": d.why}
 
             def work(r):
-                d = ladder.decide_turn(spec, start_msg, msg, r.deadline, progress, self.move_seconds)
+                d = ladder.decide_turn(spec, start_msg, msg, r.deadline, progress, self.move_seconds, r.timing)
                 r.info = {"level": d.level, "why": d.why}
                 r.result = protocol.action(d.action, d.chat)
             self.spawn(req, work)
@@ -172,10 +184,16 @@ def run():
             metrics.record("end", game_id=sm.get("game_id"), game_index=msg.get("game_index"),
                            result=msg.get("result"), reason=msg.get("reason"),
                            match_over=msg.get("match_over"), llm=llm.usage())
-            # match_over does NOT end the container: keep waiting for the next start.
+            # match_over does NOT end the container: keep waiting for the next start. Between games nothing
+            # of ours runs: the warm engine children are closed and the sandbox is emptied (phase idle).
+            resources.enter("idle")
 
         def shutdown(self, why):
             log.info("shutting down: %s" % why)
+            try:
+                resources.enter("idle")
+            except Exception:
+                log.exception("idle on shutdown failed")
             try:
                 opponents.save_all()
                 metrics.record("shutdown", why=why, llm=llm.usage("all"))
@@ -238,6 +256,7 @@ def run():
         pass
     log.info("luckydevs bot %s starting (fake_llm=%s, memory=%s)" % (
         config.HARNESS_VERSION, config.FAKE_LLM, memory.root()))
+    log.info("resources: %s" % resources.describe())
     Bot().loop()
 
 

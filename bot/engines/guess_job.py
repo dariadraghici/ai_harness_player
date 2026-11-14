@@ -133,6 +133,18 @@ def pick_actions(la, hyps_tokens, rng):
     return sorted(chosen)
 
 
+def _part(payload):
+    """(index, count) of this part when several children share one decision, else (0, 1)."""
+    try:
+        parts = max(1, int(payload.get("parts") or 1))
+        part = int(payload.get("part") or 0)
+        if 0 <= part < parts:
+            return part, parts
+    except (TypeError, ValueError):
+        pass
+    return 0, 1
+
+
 def run(sim, payload):
     if sim is None:
         return {"ok": False, "reason": "no simulator loaded"}
@@ -146,8 +158,9 @@ def run(sim, payload):
         return {"ok": True, "live": True, "algo": "single", "hypotheses": 0, "exact": False, "scored": 0,
                 "actions": [{"action": la[0], "value": 0.0, "cost": 0.0, "expected_left": 0.0, "p_hit": 0.0,
                              "classes": 0}]}
+    grow = max(1.0, float(payload.get("samples_scale") or 1.0))       # default 1.0 = today's caps
     hyps, paths, exact = C.sample_hypotheses(g, state, la, C.Clock(SAMPLE_SHARE * clock.left()), rng,
-                                           MAX_HYPOTHESES, SAMPLE_SEEDS)
+                                           int(MAX_HYPOTHESES * grow), int(SAMPLE_SEEDS * grow))
     if not hyps:
         return {"ok": False, "live": True, "reason": "no hidden value to sample"}
     n_total = len(hyps)
@@ -156,8 +169,12 @@ def run(sim, payload):
         rng.shuffle(pool)
         hyps = [hyps[i] for i in sorted(pool[:SCORING_HYPOTHESES])]
     scale = n_total / float(len(hyps))              # scores are over the subset; report for the whole set
+    part, parts = _part(payload)
     sc = Scorer(g, state, paths, hyps, clock)
     first = pick_actions(la, sc.tokens, rng)
+    n_first = len(first)
+    if parts > 1:
+        first = first[part::parts]       # every part samples the same hypotheses (same seeds) and scores its share
     scored = {}
 
     def run_over(indices):
@@ -175,7 +192,7 @@ def run(sim, payload):
         return True
 
     complete = run_over(first)
-    if complete and len(la) > len(first):
+    if complete and len(la) > n_first:
         # every action next to the best ones in the list order
         stride = max(1, int(len(la) / float(COARSE_ACTIONS)))
         best = sorted(scored, key=lambda a: scored[a][1])[:3]
@@ -191,7 +208,7 @@ def run(sim, payload):
     actions = []
     for a, (i, cost, left, p_hit, classes) in ranked[:MAX_RESULT_ACTIONS]:
         actions.append({"action": a, "value": max(-1.0, 1.0 - VALUE_SLOPE * (cost - best_cost)), "cost": cost,
-                        "expected_left": left * scale, "p_hit": p_hit, "classes": classes})
+                        "expected_left": left * scale, "p_hit": p_hit, "classes": classes, "i": i})
     return {"ok": True, "live": True, "algo": "split", "hypotheses": n_total, "exact": bool(exact),
             "scored": len(scored), "of": len(la), "entropy_bits": math.log(n_total, 2) if n_total > 1 else 0.0,
             "actions": actions}

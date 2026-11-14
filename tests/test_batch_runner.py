@@ -187,5 +187,39 @@ class BatchRunnerTests(unittest.TestCase):
         self.assertIn("$0.0003", table)
 
 
+class ResourceColumnsTests(unittest.TestCase):
+
+    def test_percentile_nearest_rank(self):
+        from scripts.batch_runner import percentile
+        self.assertEqual(percentile([], 50), 0.0)
+        self.assertEqual(percentile([5.0], 99), 5.0)
+        self.assertEqual(percentile(list(range(1, 101)), 50), 50.0)
+        self.assertEqual(percentile(list(range(1, 101)), 99), 99.0)
+
+    def test_real_key_runs_are_never_parallel_fake_runs_use_the_host(self):
+        from scripts.batch_runner import resolve_jobs
+        jobs, note = resolve_jobs(4, fake=False)
+        self.assertEqual(jobs, 1)
+        self.assertIn("refused", note)
+        self.assertEqual(resolve_jobs(0, fake=False), (1, ""))
+        self.assertEqual(resolve_jobs(3, fake=True), (3, ""))
+        self.assertGreaterEqual(resolve_jobs(0, fake=True)[0], 1)
+
+    def test_table_has_the_resource_columns(self):
+        from scripts.batch_runner import AggregateGroup, MatchResult, format_ascii_table
+        agg = AggregateGroup("tic_tac_toe", "random")
+        agg.matches_planned = 1
+        mr = MatchResult("tic_tac_toe", "random", 1, "m")
+        mr.games_count, mr.wins, mr.answer_times = 1, 1, [0.5, 1.0, 3.0]
+        mr.rss_mb, mr.children_peak, mr.cpu_s = 88.0, 2, 12.5
+        agg.add_match(mr)
+        table = format_ascii_table([agg], 1, 5.0)
+        for col in ("p50 (s)", "p99 (s)", "RSS MB", "Kids", "CPU s/match"):
+            self.assertIn(col, table)
+        self.assertIn("88", table)
+        self.assertIn("12.5", table)
+        self.assertEqual(agg.to_dict()["p99_time_s"], 3.0)
+
+
 if __name__ == "__main__":
     unittest.main()

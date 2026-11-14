@@ -44,7 +44,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from .. import config, log, memory
+from .. import config, log, memory, resources
 from . import classify, codegen, sandbox
 
 # ---------------------------------------------------------------- constants
@@ -208,8 +208,9 @@ def verify_simulator(spec, path, deadline, analysis=None, samples=None):
                    "example_action": spec.profile.example_action or "", "games": VERIFY_GAMES,
                    "step_cap": VERIFY_STEP_CAP, "budget_s": budget, "trace_games": VERIFY_TRACE_GAMES,
                    "trace_steps": VERIFY_TRACE_STEPS}
+        child_mem = resources.plan("prep_verify").child_mem_mb
         out = sandbox.run_job(path, JOB_FILE, payload, budget + VERIFY_JOB_EXTRA_S,
-                              cpu_s=int(budget * 3 + 20),
+                              mem_mb=child_mem, cpu_s=int(budget * 3 + 20),
                               slot_wait_s=max(0.0, left - budget - VERIFY_JOB_EXTRA_S))
         if not out.get("ok"):
             rep.error = out.get("kind") or "error"
@@ -222,7 +223,7 @@ def verify_simulator(spec, path, deadline, analysis=None, samples=None):
                 rep.failed_checks = ["load"]
             else:
                 rep.failures = ["the process that ran the module died (memory limit of %d MB, or a crash): %s" % (
-                    sandbox.CHILD_MEMORY_MB, msg[:300])]
+                    child_mem, msg[:300])]
             rep.failed_checks = rep.failed_checks or ["load"]
             return rep
         r = out.get("result") or {}

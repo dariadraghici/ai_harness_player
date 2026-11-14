@@ -34,8 +34,8 @@ latest, with whatever is finished by then. Early answers are fine.
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
 
-from .. import config, log, memory, specialist
-from . import classify, codegen, mastery, sandbox, verify
+from .. import config, log, memory, resources, specialist
+from . import classify, codegen, mastery, sandbox, solve, verify
 
 # proposed for bot/config.py
 PHASE_B_END_FRACTION = 0.53      # generation ends here (509 s -> 270 s = 45% of 600 s)
@@ -46,6 +46,11 @@ PHASE_B_UNKNOWN_MIN_S = 150.0    # family unknown gets candidates only with this
 
 def run_prep(msg, deadline):
     """Prepare every variant of the prep message. Returns the list of specs done."""
+    with resources.scoped("prep"):       # sandbox slots and limits from the plan for the whole prep, restored after
+        return _run_prep(msg, deadline)
+
+
+def _run_prep(msg, deadline):
     t_start = time.monotonic()
     game_id = str(msg.get("game_id") or "unknown")
     game_name = str(msg.get("game_name") or "")
@@ -61,6 +66,11 @@ def run_prep(msg, deadline):
     run_chains(done, analyses, t_start + PHASE_B_END_FRACTION * budget, t_start + VERIFY_END_FRACTION * budget)
     log.info("prep %s: simulators done in %.1fs: %d/%d variants verified" % (
         game_id, time.monotonic() - t_a, sum(1 for s in done if s.verified), len(done)))
+    t_s = time.monotonic()
+    solved = solve.solve_all(done, deadline - mastery.SAFETY_MARGIN_S)
+    if solved:
+        log.info("prep %s: pre-solved roots in %.1fs: %s" % (game_id, time.monotonic() - t_s, {
+            h[:8]: (v.get("solved"), v.get("tried")) for h, v in solved.items()}))
     mastery.refine(done, analyses, deadline)
     log.info("prep %s: strategy mastery persisted in %.1fs" % (game_id, time.monotonic() - t_a))
     return done
