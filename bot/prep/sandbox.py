@@ -111,10 +111,14 @@ class Worker:
     SandboxError; close() and kill() never raise.
     """
 
-    def __init__(self, path=None, mem_mb=CHILD_MEMORY_MB, cpu_s=CHILD_CPU_S, name=""):
+    def __init__(self, path=None, mem_mb=CHILD_MEMORY_MB, cpu_s=CHILD_CPU_S, name="", slot_wait_s=None):
+        """slot_wait_s: how long a start may wait for a free child slot. None: inside the timeout of
+        the call. A number: that long, and the timeout of the call then counts from the start of
+        the child (for batch work such as verification, where waiting for a slot is normal)."""
         self.path = os.path.abspath(path) if path else None
         self.mem_mb = int(mem_mb)
         self.cpu_s = int(cpu_s)
+        self.slot_wait_s = slot_wait_s
         self.name = name or (os.path.basename(self.path) if self.path else "job")
         self.proc = None
         self.starts = 0
@@ -130,8 +134,11 @@ class Worker:
         return self.proc is not None and self.proc.poll() is None
 
     def _start(self, deadline):
-        if not _slots.acquire(timeout=max(0.0, deadline - time.monotonic())):
+        wait = (deadline - time.monotonic()) if self.slot_wait_s is None else float(self.slot_wait_s)
+        if not _slots.acquire(timeout=max(0.0, wait)):
             raise SandboxError("no free sandbox child within the time given", "busy")
+        if self.slot_wait_s is not None:
+            deadline = time.monotonic() + START_TIMEOUT_S
         self._has_slot = True
         self._stopped = ""
         env = {"PATH": os.environ.get("PATH", "")}
@@ -309,6 +316,8 @@ class Worker:
             if not self.alive():
                 self.kill()                                   # reap a dead child, free its slot
                 self._start(min(deadline, time.monotonic() + START_TIMEOUT_S))
+                if self.slot_wait_s is not None:
+                    deadline = time.monotonic() + timeout     # the wait for a slot was not the call's time
             return self._request(req, max(0.01, deadline - time.monotonic()))
         except SandboxError:
             raise
@@ -346,13 +355,15 @@ def call_simulator(path, function, args, timeout):
         w.close()
 
 
-def run_job(sim_path, job_file, payload, timeout, mem_mb=CHILD_MEMORY_MB, cpu_s=CHILD_CPU_S):
+def run_job(sim_path, job_file, payload, timeout, mem_mb=CHILD_MEMORY_MB, cpu_s=CHILD_CPU_S, slot_wait_s=None):
     """Run one job in a fresh child and close it. NEVER raises.
+
+    slot_wait_s: see Worker. With a number the call may take up to slot_wait_s + start + timeout.
 
     Returns {"ok": True, "result": ..., "seconds": s} or
             {"ok": False, "error": "...", "kind": "...", "etype": "...", "seconds": s}."""
     t0 = time.monotonic()
-    w = Worker(sim_path, mem_mb=mem_mb, cpu_s=cpu_s)
+    w = Worker(sim_path, mem_mb=mem_mb, cpu_s=cpu_s, slot_wait_s=slot_wait_s)
     try:
         res = w.job(job_file, payload, timeout)
         return {"ok": True, "result": res, "seconds": round(time.monotonic() - t0, 3)}
