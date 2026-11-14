@@ -132,7 +132,7 @@ luckydevs-1:
       exists in `bot/metrics.py`; add per-call tokens and cost.)
 - [ ] Verify proxy behavior: model calls go straight to the gateway, anything
       else honors `HTTPS_PROXY` (urllib honors `NO_PROXY`; check in the arena).
-- [ ] Logo: a square `logo.png` (512 x 512) copied to `/logo.png` (uncomment
+- [x] Logo: a square `logo.png` (512 x 512) copied to `/logo.png` (uncomment
       the line in the Dockerfile).
 
 luckydevs-2:

@@ -1,8 +1,8 @@
 """Simulator generation by the model.
 
 Owner: luckydevs-3. Status: real (generation, static check, one repair round).
-Verification (prep/verify.py) and the sandbox (prep/sandbox.py) are the next
-stage; until they exist nothing plays on these files.
+The candidates are then verified in the sandbox (prep/verify.py), which also
+calls repair_simulator() with the failures of its checks.
 
 During prep, for a variant worth it, ask the model for several DIFFERENT
 candidate simulator modules at the same time (one working brief per
@@ -12,7 +12,11 @@ check, repair the others once, and leave the files and a manifest in
 /memory:
 
   <variant_dir>/candidates/sim_<n>.py      every candidate, good or bad
-  <variant_dir>/candidates/index.json      the manifest (read by verify.py)
+  <variant_dir>/candidates/index.json      the manifest (read by verify.py); it
+                                           carries the harness version and the
+                                           hash of the contract text, and a
+                                           manifest of another one counts as
+                                           "no candidates"
 
 HARD RULE: generated code is NEVER imported, exec-ed, eval-ed or run by the
 bot, not even in a child process. Only prep/sandbox.py may run it. Here it is
@@ -309,6 +313,16 @@ def _sha(code):
     return hashlib.sha256(code.encode("utf-8")).hexdigest()[:16]
 
 
+def contract_version():
+    """Short hash of the contract text. Candidates written for another contract are stale."""
+    return hashlib.sha256(templates.load("codegen_contract.txt").encode("utf-8")).hexdigest()[:12]
+
+
+def _current(manifest):
+    return (isinstance(manifest, dict) and manifest.get("harness_version") == config.HARNESS_VERSION
+            and manifest.get("contract") == contract_version())
+
+
 def read_manifest(spec):
     m = memory.read_json(os.path.join(candidates_dir(spec), MANIFEST))
     return m if isinstance(m, dict) else None
@@ -320,9 +334,10 @@ def _update_manifest(spec, entries):
         with _manifest_lock:
             path = os.path.join(candidates_dir(spec), MANIFEST)
             m = memory.read_json(path)
-            if not isinstance(m, dict) or m.get("harness_version") != config.HARNESS_VERSION:
-                m = {"harness_version": config.HARNESS_VERSION, "game_id": spec.game_id,
-                     "rules_hash": spec.rules_hash, "label": spec.label, "candidates": []}
+            if not _current(m):
+                m = {"harness_version": config.HARNESS_VERSION, "contract": contract_version(),
+                     "game_id": spec.game_id, "rules_hash": spec.rules_hash, "label": spec.label,
+                     "candidates": []}
             m["family"] = spec.profile.family
             m["updated"] = int(time.time())
             by_n = {c.get("n"): c for c in m.get("candidates", []) if isinstance(c, dict)}
@@ -335,10 +350,10 @@ def _update_manifest(spec, entries):
 
 
 def has_ok_candidates(spec):
-    """True when the manifest of the current harness version has a static-ok candidate on disk."""
+    """True when the manifest of the current harness version and contract has a static-ok candidate on disk."""
     try:
         m = read_manifest(spec)
-        if not m or m.get("harness_version") != config.HARNESS_VERSION:
+        if not _current(m):
             return False
         d = candidates_dir(spec)
         return any(c.get("static_ok") and c.get("file") and os.path.exists(os.path.join(d, c["file"]))
@@ -349,7 +364,9 @@ def has_ok_candidates(spec):
 
 def ok_paths(spec):
     """Static-ok candidate paths, best first: unrepaired before repaired, then by n."""
-    m = read_manifest(spec) or {}
+    m = read_manifest(spec)
+    if not _current(m):
+        return []
     d = candidates_dir(spec)
     good = [c for c in m.get("candidates", []) if c.get("static_ok") and c.get("file")
             and os.path.exists(os.path.join(d, c["file"]))]
