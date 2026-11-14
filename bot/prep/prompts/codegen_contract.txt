@@ -1,0 +1,24 @@
+SIMULATOR CONTRACT (every candidate follows exactly this; code that breaks it is thrown away)
+
+The module defines exactly these six top-level functions, with exactly these names and parameters:
+
+  parse_observation(observation, variant, seat) -> state
+  legal_actions(state) -> list of str
+  apply_action(state, action) -> state
+  is_terminal(state) -> bool
+  returns(state) -> list of two floats
+  current_player(state) -> int
+
+C1. Two kinds of values, never mix them up:
+    VARIANT PARAMETERS make this variant this variant (board size, line length, target score, number of rounds, payoffs, number of heaps). They may be module constants with the value from THIS rules text. At run time `variant` is either {} or the flat variant of the game, for example {"label": "3x3 classic", "size": 3, "connect": 3}: read each parameter as variant.get("<lower_case_name>", CONSTANT) in parse_observation and store it in the state, so a key in `variant` wins over the constant.
+    DEAL SETUP is anything that can change from one game to the next of the same variant: a start position, heap sizes, dealt cards, secret values, a document, a prize order, the scores so far. It is NEVER a constant, even when the rules text shows one (that text holds only a SAMPLE deal). Read it from the observation in parse_observation.
+    When in doubt, read it from the observation: every value that appears in the observation must come from the observation.
+C2. seat is 0 or 1, our seat. The sample turn below is always a turn of seat 0. When the observation text itself says which side we are (a mark, a color, a player number, first or second), the observation wins over seat. The state records our seat as state["me"].
+C3. The state is OUR view of the game (an information state). Anything we cannot see (the opponent's private cards, secret numbers, hidden or simultaneous choices) is stored as None. Never invent or guess hidden values.
+C4. parse_observation is called only when we must act. Right after it, current_player(state) == state["me"], or -1 for a simultaneous step.
+C5. Simultaneous step: current_player(state) returns -1; legal_actions(state) returns OUR legal actions; apply_action(state, action) receives a list of two action strings [seat 0 action, seat 1 action]. In an alternating step apply_action receives one action string, played by current_player(state).
+C6. legal_actions(state) lists the legal actions of current_player(state) (ours in a simultaneous step), in the exact arena spelling (same case, spaces, punctuation) and in the order the arena lists them; [] when terminal. For the sample observation it must equal the sample legal_actions list exactly, same order. When the arena sends null (more than 50 actions), still return the full list if it is finite and has at most 2000 entries, otherwise a representative list. Define the module constant LEGAL_ACTIONS_COMPLETE = True when the list is always complete, False when it can be representative.
+C7. returns(state) gives [value for seat 0, value for seat 1], higher is better for that seat: win 1.0, loss -1.0, draw 0.0 in win/lose games; in points games the point difference scaled into [-1, 1]. Only meaningful when is_terminal(state) is True.
+C8. Purity: no function mutates its arguments (copy first, for example with copy.deepcopy); no global state is modified; no I/O; the same input always gives the same output (no randomness inside the six functions).
+C9. The state is JSON-serializable: dict with string keys, list, str, int, float, bool, None only. No tuples as dict keys, no sets, no objects.
+C10. parse_observation raises ValueError with a clear message when the text does not fit; apply_action raises ValueError for an illegal action.
