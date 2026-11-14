@@ -82,9 +82,16 @@ def _name(v):
 class SearchEngine(base.SimEngine):
     family = "think_ahead"
     job_file = JOB_FILE
+    slice_fraction = 0.55
 
     def payload(self, spec, turn_msg, game):
-        return {"leaf_k": LEAF_PLAYOUTS, "known": game.known, "cache": load_cache(spec)}
+        variant = turn_msg.get("variant")
+        return {
+            "leaf_k": LEAF_PLAYOUTS,
+            "known": game.known,
+            "cache": load_cache(spec),
+            "variant": dict(variant) if isinstance(variant, dict) else {"label": spec.label},
+        }
 
     def build(self, res, spec, turn_msg, game):
         acts = res.get("actions") or []

@@ -170,7 +170,8 @@ class SimEngine(BaseEngine):
             return []
         clock = turn_msg.get("seconds")
         clock = float(clock) if isinstance(clock, (int, float)) and clock > 0 else float(config.TURN_CLOCK_S)
-        budget = min(SLICE_FRACTION * clock, deadline - time.monotonic() - 0.4)
+        fraction = float(getattr(self, "slice_fraction", SLICE_FRACTION))
+        budget = min(fraction * clock, deadline - time.monotonic() - 0.4)
         if budget < SLICE_MIN_S:
             log.info("%s engine: no time (%.2fs)" % (self.family, budget))
             return []

@@ -552,7 +552,7 @@ class BaseTests(Base):
         eng = self.engine(search.SearchEngine)
         t = time.monotonic()
         self.assertEqual(self.ask(eng, spec, self.turn(PILE_OBS % 7, ["take 1", "take 2", "take 3"])), [])
-        self.assertLess(time.monotonic() - t, 1.0 + 1.0 + 1.5)          # slice (1 s) + backstop (1 s) + start
+        self.assertLess(time.monotonic() - t, 12.0 + 1.0 + 1.5)         # think-ahead slice + backstop + start
         self.assertEqual(sandbox.live_count(), 0)
 
     def test_slow_simulator_keeps_the_slice(self):
@@ -560,7 +560,7 @@ class BaseTests(Base):
         eng = self.engine(search.SearchEngine)
         t = time.monotonic()
         c = self.ask(eng, spec, self.turn(PILE_OBS % 21, ["take 1", "take 2", "take 3"]))
-        self.assertLess(time.monotonic() - t, 1.0 + 1.0 + 0.5)
+        self.assertLess(time.monotonic() - t, 12.0 + 1.0 + 0.5)
         self.assertEqual(sandbox.live_count(), 0)
         self.assertTrue(c)                                             # something, from the last finished depth or MCTS
 

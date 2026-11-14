@@ -47,6 +47,7 @@ PLAYOUT_CAP = 400
 AB_SHARE = 0.6            # of the slice for alpha-beta when the game is not solved; MCTS gets the rest
 VAR_FLOOR = 0.05          # floor of the variance of a mean return, so 1-2 playouts never look certain
 LEAF_SCALE = 0.9          # an estimated leaf never reaches the value of a proven result
+ENDGAME_EMPTY_MAX = 24
 
 
 def _common():
@@ -76,6 +77,273 @@ def _preferred_order(la, payload):
             if action in la and action not in preferred:
                 preferred.append(action)
     return preferred + [action for action in la if action not in preferred]
+
+
+def _board(state):
+    """Return a rectangular board from common generated-simulator state shapes."""
+    if not isinstance(state, dict):
+        return None
+    for name in ("board", "grid", "cells", "position"):
+        value = state.get(name)
+        if not isinstance(value, list) or not value:
+            continue
+        if all(isinstance(row, list) and row for row in value):
+            width = len(value[0])
+            if all(len(row) == width for row in value):
+                return value
+        if all(isinstance(cell, str) for cell in value):
+            width = int(round(len(value) ** 0.5))
+            if width and width * width == len(value):
+                return [value[row * width:(row + 1) * width] for row in range(width)]
+    return None
+
+
+def _empty_cells(state):
+    board = _board(state)
+    if board is None:
+        return None
+    return sum(cell in (".", "", None) for row in board for cell in row)
+
+
+def _connect_length(state):
+    if not isinstance(state, dict):
+        return None
+    for name in ("connect", "connect_n", "win_length", "target"):
+        value = state.get(name)
+        if isinstance(value, int) and value >= 3:
+            return value
+    return None
+
+
+def _changed_cell(before, after):
+    left, right = _board(before), _board(after)
+    if left is None or right is None or len(left) != len(right):
+        return None
+    changed = []
+    for row in range(len(left)):
+        if len(left[row]) != len(right[row]):
+            return None
+        for col in range(len(left[row])):
+            if left[row][col] != right[row][col]:
+                changed.append((row, col))
+    return changed[0] if len(changed) == 1 else None
+
+
+def _gravity_order(g, state, actions):
+    """Center-first ordering when a simulator exposes a gravity-like board."""
+    if isinstance(g, BitboardGame):
+        middle = (g.width - 1) / 2.0
+        return sorted(actions, key=lambda action: -abs(g.action_column[action] - middle))
+    board = _board(state)
+    if board is None:
+        return list(actions)
+    width = len(board[0])
+    scored = []
+    for index, action in enumerate(actions):
+        try:
+            cell = _changed_cell(state, g.apply(state, action))
+        except Exception:
+            cell = None
+        center = -abs(2 * cell[1] - (width - 1)) if cell else 0
+        row = cell[0] if cell else 0
+        scored.append((center, row, -index, action))
+    return [item[-1] for item in sorted(scored, reverse=True)]
+
+
+def _leaf_value(g, state):
+    """Bounded generic evaluation; exact terminal values are handled by search."""
+    cp = g.player(state)
+    if cp not in (0, 1):
+        return 0.0
+    try:
+        actions = g.legal(state)
+        threats = immediate_wins(g, state, cp)
+    except Exception:
+        return 0.0
+    if threats:
+        return 0.78 if cp == g.me else -0.78
+    board = _board(state)
+    center = 0.0
+    if board:
+        width = len(board[0])
+        midpoint = (width - 1) / 2.0
+        for row in board:
+            for col, cell in enumerate(row):
+                if cell not in (".", "", None):
+                    center += (midpoint - abs(col - midpoint)) / max(1.0, midpoint + 1.0)
+    mobility = min(1.0, len(actions) / 12.0)
+    value = 0.03 * mobility + 0.02 * max(-1.0, min(1.0, center / 8.0))
+    return value if cp == g.me else -value
+
+
+class FastPosition:
+    __slots__ = ("masks", "mover")
+
+    def __init__(self, masks, mover):
+        self.masks = masks
+        self.mover = mover
+
+
+class BitboardGame:
+    """Validated gravity adapter using Python integers instead of state copies."""
+
+    def __init__(self, source, width, height, connect, action_column, direction,
+                 seat_masks, me, state):
+        self.source = source
+        self.width = width
+        self.height = height
+        self.connect = connect
+        self.action_column = action_column
+        self.direction = direction
+        self.seat_masks = seat_masks
+        self.me = me
+        self.full = (1 << (width * height)) - 1
+        masks = [0, 0]
+        board = _board(state)
+        for row in range(height):
+            for col in range(width):
+                cell = board[row][col]
+                for seat, token in seat_masks.items():
+                    if cell == token:
+                        masks[seat] |= 1 << (row * width + col)
+        self.initial = FastPosition(tuple(masks), source.player(state))
+
+    @classmethod
+    def create(cls, game, state, actions, variant):
+        board = _board(state)
+        connect = _connect_length(state)
+        if connect is None and isinstance(variant, dict):
+            for name in ("connect", "connect_n", "win_length", "target"):
+                if isinstance(variant.get(name), int):
+                    connect = variant[name]
+                    break
+        if board is None or connect is None or connect < 3:
+            return None
+        height, width = len(board), len(board[0])
+        if width > 16 or height > 16 or connect > max(width, height):
+            return None
+        directions = []
+        for direction in (1, -1):
+            valid = True
+            for col in range(width):
+                seen_empty = False
+                for row in range(height) if direction == 1 else range(height - 1, -1, -1):
+                    empty = board[row][col] in (".", "", None)
+                    if empty:
+                        seen_empty = True
+                    elif seen_empty:
+                        valid = False
+                        break
+                if not valid:
+                    break
+            if valid:
+                directions.append(direction)
+        if len(directions) != 1:
+            return None
+        direction = directions[0]
+        action_column = {}
+        token_by_seat = {}
+        try:
+            mover = game.player(state)
+            if mover not in (0, 1):
+                return None
+            for action in actions:
+                child = game.apply(state, action)
+                cell = _changed_cell(state, child)
+                if cell is None or cell[1] in action_column.values():
+                    return None
+                action_column[action] = cell[1]
+                token_by_seat[mover] = child_board = _board(child)[cell[0]][cell[1]]
+            if len(action_column) != len(actions):
+                return None
+            for action, col in action_column.items():
+                child = game.apply(state, action)
+                cell = _changed_cell(state, child)
+                expected = next((row for row in (range(height) if direction == 1
+                                      else range(height - 1, -1, -1))
+                                 if board[row][col] in (".", "", None)), None)
+                if cell[0] != expected:
+                    return None
+            tokens = [cell for row in board for cell in row
+                      if cell not in (".", "", None)]
+            other = [token for token in set(tokens) if token != token_by_seat[mover]]
+            token_by_seat[1 - mover] = other[0] if other else "__other__"
+            return cls(game, width, height, connect, action_column, direction,
+                       token_by_seat, game.me, state)
+        except Exception:
+            return None
+
+    def player(self, state):
+        return state.mover
+
+    def _bit(self, row, col):
+        return 1 << (row * self.width + col)
+
+    def _winner(self, masks):
+        starts = []
+        horizontal = 0
+        vertical = 0
+        diagonal_right = 0
+        diagonal_left = 0
+        for row in range(self.height):
+            for col in range(self.width):
+                bit = self._bit(row, col)
+                if col <= self.width - self.connect:
+                    horizontal |= bit
+                if row <= self.height - self.connect:
+                    vertical |= bit
+                if row <= self.height - self.connect and col <= self.width - self.connect:
+                    diagonal_right |= bit
+                if row <= self.height - self.connect and col >= self.connect - 1:
+                    diagonal_left |= bit
+        lines = ((1, horizontal), (self.width, vertical),
+                 (self.width + 1, diagonal_right), (self.width - 1, diagonal_left))
+        for seat, mask in enumerate(masks):
+            for shift, start_mask in lines:
+                run = mask & start_mask
+                for distance in range(1, self.connect):
+                    run &= mask >> (shift * distance)
+                if run:
+                    return seat
+        return None
+
+    def terminal(self, state):
+        return self._winner(state.masks) is not None or (state.masks[0] | state.masks[1]) == self.full
+
+    def legal(self, state):
+        occupied = state.masks[0] | state.masks[1]
+        actions = []
+        for action, col in self.action_column.items():
+            if any(not (occupied & self._bit(row, col))
+                   for row in (range(self.height) if self.direction == 1
+                               else range(self.height - 1, -1, -1))):
+                actions.append(action)
+        return actions
+
+    def apply(self, state, action):
+        if action not in self.action_column or action not in self.legal(state):
+            raise ValueError("illegal action")
+        occupied = state.masks[0] | state.masks[1]
+        col = self.action_column[action]
+        row = next(row for row in (range(self.height) if self.direction == 1
+                                   else range(self.height - 1, -1, -1))
+                   if not (occupied & self._bit(row, col)))
+        masks = list(state.masks)
+        masks[state.mover] |= self._bit(row, col)
+        return FastPosition(tuple(masks), 1 - state.mover)
+
+    def value(self, state):
+        winner = self._winner(state.masks)
+        if winner is None:
+            return 0.0
+        return 1.0 if winner == self.me else -1.0
+
+    def returns(self, state):
+        value = self.value(state)
+        return (value, -value) if self.me == 0 else (-value, value)
+
+    def key(self, state):
+        return "%d:%d:%d" % (state.masks[0], state.masks[1], state.mover)
 
 
 def immediate_wins(g, state, seat):
@@ -156,10 +424,11 @@ def tactical_result(actions, value, note, depth=2):
 # ---------------------------------------------------------------- alpha-beta
 class AlphaBeta:
 
-    def __init__(self, g, clock, known, leaf_k):
+    def __init__(self, g, clock, known, leaf_k, exact=False):
         self.g = g
         self.clock = clock
         self.leaf_k = leaf_k
+        self.exact = exact
         self.tt = {}
         for k, v in (known or {}).items():
             self.tt[k] = (BIG, EXACT, float(v), False, None)
@@ -167,18 +436,10 @@ class AlphaBeta:
         self.playouts = 0
 
     def leaf(self, s, key):
+        if self.exact:
+            return 0.0
         if self.leaf_k <= 0:
-            cp = self.g.player(s)
-            if cp not in (0, 1):
-                return 0.0
-            threats = immediate_wins(self.g, s, cp)
-            if threats:
-                return 0.8 if cp == self.g.me else -0.8
-            try:
-                mobility = len(self.g.legal(s))
-            except Exception:
-                return 0.0
-            return 0.02 * mobility if cp == self.g.me else -0.02 * mobility
+            return _leaf_value(self.g, s)
         rng = random.Random(zlib.crc32(key.encode("utf-8")))
         total, n = 0.0, 0
         for _ in range(self.leaf_k):
@@ -226,6 +487,8 @@ class AlphaBeta:
         winning = set(immediate_wins(g, s, cp))
         if winning:
             la = [a for a in la if a in winning] + [a for a in la if a not in winning]
+        else:
+            la = _gravity_order(g, s, la)
         prev = e[4] if e is not None else None
         if prev in la:
             la = [prev] + [a for a in la if a != prev]
@@ -267,14 +530,15 @@ class AlphaBeta:
         return out
 
 
-def alpha_beta(g, state, la, clock, payload):
+def alpha_beta(g, state, la, clock, payload, exact=False):
     margin = float(payload.get("margin") or 0.05)
-    ab = AlphaBeta(g, clock, payload.get("known"), int(payload.get("leaf_k") or 0))
-    order = list(la)
+    ab = AlphaBeta(g, clock, payload.get("known"), int(payload.get("leaf_k") or 0), exact=exact)
+    order = _gravity_order(g, state, la)
     done, depth, solved = None, 1, False
-    while depth <= 400:
+    max_depth = max(1, int(payload.get("exact_depth") or 400)) if exact else 400
+    while depth <= max_depth:
         try:
-            res = ab.root_pass(state, order, depth, margin, False)
+            res = ab.root_pass(state, order, depth, 0.0 if exact else margin, exact)
         except TimeUp:
             break
         done = (depth, res)
@@ -285,7 +549,7 @@ def alpha_beta(g, state, la, clock, payload):
         if not horizon:
             solved = True
             break
-        if best_v >= 1.0 - 1e-9:        # the largest value there is: deeper search cannot improve it
+        if not exact and best_v >= 1.0 - 1e-9:  # proven root win needs no deeper search
             break
         depth += 1
     if done is None:
@@ -498,6 +762,10 @@ def run(sim, payload):
     if g is None:
         return {"ok": False, "live": False, "reason": reason}
     la = g.legal(state)
+    original_state = state
+    fast = BitboardGame.create(g, state, la, payload.get("variant"))
+    if fast is not None:
+        g, state, la = fast, fast.initial, fast.legal(fast.initial)
     rng = random.Random(zlib.crc32(C.dump(payload.get("observation", "")).encode("utf-8")))
     try:
         root_key = g.key(state)
@@ -542,17 +810,40 @@ def run(sim, payload):
             return {"ok": True, "live": True, "algo": "single", "solved": False, "depth": 0, "nodes": 0,
                     "playouts": 0, "actions": [{"action": la[0], "value": 0.0, "bound": None}],
                     "best_value": 0.0, "root_key": root_key}
-        per_node, branching, zero_sum = calibrate(g, state, la, rng, 0.15 * clock.left())
-        use_mcts = bool(payload.get("unknown")) or payload.get("both_seats") is False or not zero_sum
-        if not use_mcts:
-            leaf_cost = per_node * (1 + 4 * int(payload.get("leaf_k") or 0))
-            depth2 = len(la) * max(branching, 1.0) * leaf_cost
-            use_mcts = depth2 > 0.5 * clock.left()
+        empty = _empty_cells(original_state)
+        exact_mode = (empty is not None and empty <= ENDGAME_EMPTY_MAX
+                      and not payload.get("unknown") and payload.get("both_seats") is not False)
         out = None
-        if not use_mcts:
-            out = alpha_beta(g, state, la, C.Clock(AB_SHARE * clock.left()), payload)
-            if out is not None and not out["solved"] and out["best_value"] < 1.0 - 1e-9:
-                out = refine(g, state, la, clock, payload, rng, out)
+        if exact_mode:
+            payload["exact_depth"] = min(400, max(1, empty + 1))
+            out = alpha_beta(g, state, la, C.Clock(max(0.05, 0.9 * clock.left())),
+                             payload, exact=True)
+            per_node, branching, zero_sum = 0.0, float(len(la)), True
+            use_mcts = False
+        if out is None:
+            gravity = isinstance(g, BitboardGame) or _board(state) is not None
+            if gravity:
+                per_node, branching, zero_sum = 0.0, float(len(la)), True
+                use_mcts = False
+            else:
+                per_node, branching, zero_sum = calibrate(g, state, la, rng, 0.15 * clock.left())
+                use_mcts = bool(payload.get("unknown")) or payload.get("both_seats") is False or not zero_sum
+            if not use_mcts and not gravity:
+                leaf_cost = per_node * (1 + 4 * int(payload.get("leaf_k") or 0))
+                depth2 = len(la) * max(branching, 1.0) * leaf_cost
+                use_mcts = depth2 > 0.5 * clock.left()
+            if not use_mcts:
+                share = 0.9 if gravity else AB_SHARE
+                out = alpha_beta(g, state, la, C.Clock(share * clock.left()), payload)
+                if (out is not None and not out["solved"] and out["best_value"] < 1.0 - 1e-9
+                        and not gravity):
+                    out = refine(g, state, la, clock, payload, rng, out)
+        if out is None and (exact_mode or _board(state) is not None):
+            out = {"ok": True, "algo": "search-timeout", "solved": False, "depth": 0,
+                   "nodes": 0, "playouts": 0,
+                   "actions": [{"action": action, "value": 0.0, "bound": "<="}
+                               for action in la],
+                   "best_value": 0.0}
         if out is None:
             out = mcts(g, state, la, C.Clock(max(0.05, clock.left())), payload, rng)
         if out is None:
@@ -572,5 +863,10 @@ def run(sim, payload):
         out["zero_sum"] = zero_sum
         out["branching"] = len(la)
         return out
+    except TimeUp:
+        return {"ok": True, "live": True, "algo": "search-timeout", "solved": False,
+                "depth": 0, "nodes": 0, "playouts": 0,
+                "actions": [{"action": action, "value": 0.0, "bound": "<="}
+                            for action in la]}
     except Unsupported as e:
         return {"ok": False, "live": True, "reason": str(e)}
