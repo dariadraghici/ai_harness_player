@@ -14,6 +14,7 @@ import threading
 import time
 
 from . import action_guard, config, log, memory
+from .engines import wordle
 from .interfaces import GameProfile, VariantSpec
 from .prep import classify, verify
 
@@ -95,6 +96,8 @@ def build_variant(game_id, game_name, label, rules, sample_turn, deadline, think
         classify.write_analysis(game_id, rhash, analysis)   # before meta.json
         action_guard.save_grammar(spec)
         memory.save_variant(spec)
+        if wordle.is_wordle_rules(rules):
+            wordle.prepare_strategy(game_id, rhash)
     except Exception:
         log.exception("build_variant failed for %s/%s" % (game_id, label))
         if not isinstance(spec.profile, GameProfile):

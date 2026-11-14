@@ -1,6 +1,9 @@
+import tempfile
 import time
 import unittest
+import shutil
 
+from bot import memory
 from bot.engines import wordle
 from bot.interfaces import GameProfile, VariantSpec
 
@@ -62,4 +65,17 @@ class WordleTests(unittest.TestCase):
             result = wordle.candidates(spec, {"observation": observation},
                                        time.monotonic() + 1.0)
             self.assertTrue(wordle.allowed_word(result[0].action.split()[-1], 6))
+
+    def test_prep_strategy_is_written_atomically(self):
+        root = tempfile.mkdtemp(prefix="ld-wordle-")
+        memory.reset_root_for_tests(root)
+        try:
+            self.assertTrue(wordle.prepare_strategy("wordle", "rules"))
+            strategy = memory.read_json(
+                memory.variant_dir("wordle", "rules") + "/" + wordle.STRATEGY_FILE)
+            self.assertEqual(strategy["version"], 1)
+            self.assertTrue(strategy["openers"]["6"])
+        finally:
+            memory.reset_root_for_tests(None)
+            shutil.rmtree(root)
 

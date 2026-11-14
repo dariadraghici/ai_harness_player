@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from ..interfaces import Candidate
 
 _DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+STRATEGY_FILE = "wordle.json"
 _WORD_RE = re.compile(r"\bguess\s+([A-Za-z]+)", re.IGNORECASE)
 _LENGTH_RE = re.compile(r"\b(\d+)\s*[- ]?letters?\b", re.IGNORECASE)
 _PATTERN_RE = re.compile(r"\b[012]{3,20}\b")
@@ -154,6 +155,33 @@ def _opener(words, length):
     frequency = Counter(letter for word in pool for letter in set(word))
     return max(pool, key=lambda word: (sum(frequency[c] for c in set(word)),
                                        len(set(word)), word))[0: length]
+
+
+def prepare_strategy(game_id, rules_hash):
+    """Persist cheap opener and second-turn tables for a prepared variant."""
+    try:
+        from .. import memory
+        allowed, answers = load_dictionary()
+        lengths = sorted(set(len(word) for word in allowed))
+        openers = {str(length): _opener(allowed, length) for length in lengths}
+        second = {}
+        for length in lengths:
+            opener = openers.get(str(length), "")
+            if not opener:
+                continue
+            secrets = [word for word in answers if len(word) == length]
+            buckets = defaultdict(list)
+            for secret in secrets:
+                buckets["".join(str(value) for value in score(opener, secret))].append(secret)
+            for pattern, group in buckets.items():
+                if group:
+                    second[opener + ":" + pattern] = max(
+                        group, key=lambda word: (_prior(group).get(word, 0.0), word))
+        path = os.path.join(memory.variant_dir(game_id, rules_hash), STRATEGY_FILE)
+        memory.write_json_atomic(path, {"version": 1, "openers": openers, "second": second})
+        return True
+    except Exception:
+        return False
 
 
 def _probe_words(allowed, candidates, history, limit=300):
