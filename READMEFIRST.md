@@ -191,14 +191,20 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | Path | What it is / what it is for | Status |
 |---|---|---|
 | `bot/prep/__init__.py` | package marker | real |
-| `bot/prep/pipeline.py` | prep under the time budget: phase A (classify variants in parallel, cache lookup), family alignment across variants, extension points | real |
+| `bot/prep/pipeline.py` | prep under the time budget: phase A (classify variants in parallel, cache lookup), family alignment across variants; phase B (simulator candidates for the variants worth it, done at about 45 percent of the prep clock); extension point for verification | real |
 | `bot/prep/classify.py` | profile: code evidence (family signals, format sentences, quoted examples, sample facts) + one model call + field checks + at most one repair call; `analysis.json`; `align_families`; `call_model` (deadline-checked, capped prep model calls) | real |
 | `bot/prep/templates.py` | loader of the prep prompt templates in `bot/prep/prompts/` | real |
 | `bot/prep/prompts/classify_system.txt` | system prompt of the classify call (fields and what each is used for) | real |
 | `bot/prep/prompts/classify_user.txt` | user message of the classify call (starts with `TASK: classify`) | real |
 | `bot/prep/prompts/classify_repair.txt` | follow-up message of the one repair call (the complaints found by code) | real |
-| `tests/test_prep.py` | prep unit tests (mocked model): evidence, field checks, repair, playbook cap, alignment, analysis.json | real |
-| `bot/prep/codegen.py` | simulator generation and repair by the model | stub |
+| `bot/prep/prompts/codegen_contract.txt` | THE simulator contract C1-C10 (variant parameters vs deal setup, seat, information state, simultaneous steps, legal actions, returns, purity, JSON state, errors), used by generation and repair | real |
+| `bot/prep/prompts/codegen_system.txt` | system prompt of codegen: role, contract, code rules (import allowlist, forbidden names), output format | real |
+| `bot/prep/prompts/codegen_user.txt` | user message of one codegen call (starts with `TASK: codegen`): brief, rules, prep facts, sample turn | real |
+| `bot/prep/prompts/codegen_sample.txt`, `codegen_nosample.txt` | the sample-turn block of the codegen prompts (with and without a sample turn) | real |
+| `bot/prep/prompts/codegen_repair.txt` | user message of a repair call (`TASK: codegen-repair`): failures + current module | real |
+| `bot/prep/prompts/codegen_briefs.txt` | the working briefs that make parallel candidates differ (minimal, parser-first, numbered-checks) | real |
+| `tests/test_prep.py` | prep unit tests (mocked model): evidence, field checks, repair, playbook cap, alignment, analysis.json; code extraction, static check, generation + manifest + repair, deadlines, phase B, cold path without codegen | real |
+| `bot/prep/codegen.py` | simulator generation: parallel candidates with different briefs, code extraction, static `ast` check (never executes code), files + manifest `candidates/index.json`, one repair round, `repair_simulator` | real |
 | `bot/prep/verify.py` | simulator tests against sample turns, `VerifyReport` | stub |
 | `bot/prep/sandbox.py` | generated code in a killable child process | stub |
 | `bot/specialist.py` | per-variant registry: process -> memory -> same variant label (`lookup_by_label`) -> cold prep; `build_variant` (extension point) | real |

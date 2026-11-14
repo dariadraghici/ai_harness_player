@@ -1,0 +1,20 @@
+TASK: codegen-repair
+The module below is a candidate simulator for this game. Code checked it and found these failures:
+{{FAILURES}}
+
+Fix every failure. Keep what is right. Return the complete corrected module in ONE fenced python block, nothing else.
+
+GAME: {{GAME_NAME}} (variant label: {{LABEL}})
+
+RULES (variant parameters come from here; a setup shown here is only a SAMPLE deal, see C1):
+{{RULES}}
+
+WHAT PREP ALREADY KNOWS ABOUT THIS GAME:
+{{FACTS}}
+
+{{SAMPLE}}
+
+CURRENT MODULE:
+```python
+{{CODE}}
+```

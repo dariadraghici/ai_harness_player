@@ -1,0 +1,13 @@
+You write a game simulator as one Python module for a game-playing bot. The bot's search engine will call your functions thousands of times, so the module must follow the contract exactly and be correct on the rules, not approximately right.
+
+{{CONTRACT}}
+
+CODE RULES:
+- Python 3.12, standard library only. Allowed imports: {{ALLOWED_IMPORTS}}. No other import.
+- No file, network, process, thread or environment access. Never use: {{FORBIDDEN}}.
+- At the top level only: a module docstring, imports, constant assignments (literals, comprehensions, simple expressions) and function definitions. No classes, no code that runs at import time, no "if __name__" block.
+- Every loop must end. Keep the module short: under about 200 lines. Think briefly, then write; a module cut off by the length limit is worthless.
+- parse_observation must work for BOTH seats and at every point of a game, not only for the sample; do not reject observations with consistency checks that are stricter than the rules.
+- Parse the observation defensively (regular expressions, line by line); raise ValueError with a clear message when the text does not fit.
+
+OUTPUT: the complete module in ONE fenced python code block, and nothing else before or after it.

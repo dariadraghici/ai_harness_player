@@ -270,5 +270,235 @@ class ClassifyTests(TempMemory):
         self.assertIsNone(classify.load_analysis("gameA", spec.rules_hash))
 
 
+GOOD_MODULE = """\"\"\"Tiny simulator.\"\"\"
+import copy
+
+LEGAL_ACTIONS_COMPLETE = True
+CELLS = [c + r for r in "123" for c in "abc"]
+
+
+def parse_observation(observation, variant, seat):
+    if "board" not in observation:
+        raise ValueError("no board in observation")
+    return {"me": seat, "board": {c: None for c in CELLS}, "to_move": seat}
+
+
+def legal_actions(state):
+    return [c for c in CELLS if state["board"][c] is None]
+
+
+def apply_action(state, action):
+    s = copy.deepcopy(state)
+    s["board"][action] = s["to_move"]
+    s["to_move"] = 1 - s["to_move"]
+    return s
+
+
+def is_terminal(state):
+    return all(v is not None for v in state["board"].values())
+
+
+def returns(state):
+    return [0.0, 0.0]
+
+
+def current_player(state):
+    return state["to_move"]
+"""
+
+
+def fenced(code, before="Here is the module:", after="Done."):
+    return "%s\n```python\n%s```\n%s" % (before, code, after)
+
+
+class ExtractTests(unittest.TestCase):
+
+    def test_extraction(self):
+        from bot.prep.codegen import extract_code
+        code, notes = extract_code(fenced(GOOD_MODULE))
+        self.assertEqual(code, GOOD_MODULE)
+        self.assertEqual(notes, [])
+        two = fenced("def small(x):\n    return x\n") + "\n" + fenced(GOOD_MODULE)
+        self.assertEqual(extract_code(two)[0], GOOD_MODULE)            # the largest block
+        cut, notes = extract_code("```python\n" + GOOD_MODULE[:200])
+        self.assertIsNotNone(cut)
+        self.assertIn("cut off", notes[0])
+        self.assertEqual(extract_code('{"action": "1", "chat": "x"}')[0], None)
+        self.assertEqual(extract_code("```json\n{\"a\": 1}\n```")[0], None)
+        self.assertEqual(extract_code(GOOD_MODULE)[0], GOOD_MODULE)    # bare code that parses
+        self.assertEqual(extract_code(None)[0], None)
+        self.assertEqual(extract_code("")[0], None)
+
+
+class StaticCheckTests(unittest.TestCase):
+
+    def check(self, code):
+        from bot.prep.codegen import static_check
+        return static_check(code)
+
+    def test_good_module_passes(self):
+        self.assertEqual(self.check(GOOD_MODULE), [])
+
+    def test_failures_are_readable(self):
+        cases = {
+            "missing": (GOOD_MODULE.replace("def returns(state):\n    return [0.0, 0.0]\n", ""),
+                        "missing top-level function returns"),
+            "params": (GOOD_MODULE.replace("def is_terminal(state):", "def is_terminal(state, extra):"),
+                       "is_terminal has 2 positional parameters, expected exactly 1"),
+            "import": (GOOD_MODULE.replace("import copy", "import copy\nimport os"), "import of 'os'"),
+            "open": (GOOD_MODULE.replace('return [0.0, 0.0]', 'return open("x").read()'), "'open'"),
+            "toplevel": (GOOD_MODULE + "\nlegal_actions({})\n", "top-level Expr is not allowed"),
+            "importtime": (GOOD_MODULE + "\nX = parse_observation('board', {}, 0)\n", "import time"),
+            "syntax": (GOOD_MODULE.replace("def legal_actions(state):", "def legal_actions(state)"),
+                       "syntax error at line"),
+            "global": (GOOD_MODULE.replace("    return state[\"to_move\"]", "    global CELLS\n    return 0"),
+                       "global statement"),
+            "dunder": (GOOD_MODULE.replace("return [0.0, 0.0]", "return ().__class__.__subclasses__()"),
+                       "'__class__'"),
+        }
+        for name, (code, expect) in cases.items():
+            fails = self.check(code)
+            self.assertTrue(fails, name)
+            self.assertTrue(any(expect in f for f in fails), "%s: %s" % (name, fails))
+
+    def test_main_block_is_stripped(self):
+        from bot.prep.codegen import _check
+        code, fails, notes = _check(GOOD_MODULE + '\nif __name__ == "__main__":\n    print(1)\n')
+        self.assertEqual(fails, [])
+        self.assertTrue(notes)
+        self.assertNotIn("print", code)
+
+
+class CodegenTests(TempMemory):
+
+    def spec(self):
+        return VariantSpec("gameB", "Grid", "std", TTT_RULES, memory.rules_hash(TTT_RULES),
+                           profile=GameProfile(family="think_ahead", example_action="b2"),
+                           sample_turn=TTT_SAMPLE)
+
+    def fake_model(self, calls):
+        def fake(messages, **kw):
+            calls.append((kw.get("tag"), messages))
+            user = messages[-1]["content"]
+            if "TASK: codegen-repair" in user:
+                if "syntax error" in user:
+                    return fenced(GOOD_MODULE)                               # repair works
+                return fenced(GOOD_MODULE.replace("import copy", "import copy\nimport os"))
+            if "Smallest possible state" in user:
+                return fenced(GOOD_MODULE)
+            if "Start from the sample observation" in user:
+                return fenced(GOOD_MODULE.replace("def legal_actions(state):", "def legal_actions(state)"))
+            return fenced(GOOD_MODULE.replace("import copy", "import copy\nimport os"))
+        return fake
+
+    def test_generate_good_bad_and_repair(self):
+        from bot.prep import codegen
+        calls = []
+        spec = self.spec()
+        with mock.patch("bot.llm.complete", side_effect=self.fake_model(calls)):
+            paths = codegen.generate_simulators(spec, time.monotonic() + 100)
+        d = codegen.candidates_dir(spec)
+        self.assertEqual([os.path.basename(p) for p in paths], ["sim_1.py", "sim_2.py"])
+        self.assertEqual(sorted(f for f in os.listdir(d) if f.endswith(".py")),
+                         ["sim_1.py", "sim_2.py", "sim_3.py"])
+        tags = [t for t, _ in calls]
+        self.assertEqual(sorted(tags), ["codegen-1", "codegen-2", "codegen-3",
+                                        "codegen-repair-2", "codegen-repair-3"])
+        first_user = calls[0][1][-1]["content"]
+        self.assertIn("TASK: codegen", first_user)
+        self.assertIn("board empty", first_user)                    # the sample observation
+        self.assertIn('"a1", "b1"', first_user)                     # the sample legal actions
+        self.assertIn("C5. Simultaneous step", calls[0][1][0]["content"])   # the contract
+        m = codegen.read_manifest(spec)
+        by_n = {c["n"]: c for c in m["candidates"]}
+        self.assertTrue(by_n[1]["static_ok"] and not by_n[1]["repaired"])
+        self.assertTrue(by_n[2]["static_ok"] and by_n[2]["repaired"])
+        self.assertFalse(by_n[3]["static_ok"])
+        self.assertTrue(by_n[3]["repair_failures"])
+        for c in m["candidates"]:
+            for k in ("n", "file", "brief", "static_ok", "failures", "repaired", "chars", "seconds",
+                      "harness_version", "sha256"):
+                self.assertIn(k, c)
+        self.assertEqual(memory.read_text(paths[1]), GOOD_MODULE)     # repaired file overwritten
+        self.assertTrue(codegen.has_ok_candidates(spec))
+        self.assertFalse(os.path.exists(os.path.join(memory.variant_dir(spec.game_id, spec.rules_hash),
+                                                     "simulator.py")))
+        self.assertFalse(spec.verified)
+        self.assertIsNone(spec.simulator_path)
+
+    def test_deadline_in_past_makes_no_call(self):
+        from bot.prep import codegen
+        with mock.patch("bot.llm.complete") as m:
+            self.assertEqual(codegen.generate_simulators(self.spec(), time.monotonic() - 1), [])
+            self.assertEqual(codegen.generate_simulators(self.spec(), time.monotonic() + 10), [])
+            m.assert_not_called()
+
+    def test_model_none_gives_empty(self):
+        from bot.prep import codegen
+        with mock.patch("bot.llm.complete", return_value=None):
+            spec = self.spec()
+            self.assertEqual(codegen.generate_simulators(spec, time.monotonic() + 100), [])
+        m = codegen.read_manifest(spec)
+        self.assertEqual(len(m["candidates"]), 3)
+        self.assertTrue(all(not c["static_ok"] and c["file"] is None for c in m["candidates"]))
+
+    def test_repair_accepts_report_kinds(self):
+        from bot.prep import codegen
+        from bot.prep.verify import VerifyReport
+        spec = self.spec()
+        path = os.path.join(codegen.candidates_dir(spec), "sim_4.py")
+        memory.write_text_atomic(path, "def broken(:\n")
+        for report in (VerifyReport(failures=["syntax error"]), ["syntax error"], "syntax error", None):
+            with mock.patch("bot.llm.complete", return_value=fenced(GOOD_MODULE)):
+                self.assertEqual(codegen.repair_simulator(spec, path, report, time.monotonic() + 60), path)
+        with mock.patch("bot.llm.complete", return_value="no code"):
+            self.assertIsNone(codegen.repair_simulator(spec, path, "x", time.monotonic() + 60))
+
+    def test_pipeline_phase_b_and_cache_skip(self):
+        from bot.prep import pipeline
+        calls = []
+        msg = {"type": "prep", "game_id": "gameC", "game_name": "Grid",
+               "variants": [{"label": "std", "rules": TTT_RULES, "sample_turn": TTT_SAMPLE}]}
+
+        def fake(messages, **kw):
+            calls.append(kw.get("tag"))
+            if "TASK: classify" in messages[-1]["content"]:
+                return answer()
+            return fenced(GOOD_MODULE)
+        with mock.patch("bot.llm.complete", side_effect=fake):
+            done = pipeline.run_prep(msg, time.monotonic() + 400)
+            self.assertEqual(len(done), 1)
+            self.assertEqual(sorted(calls), ["classify", "codegen-1", "codegen-2", "codegen-3"])
+            from bot import specialist
+            specialist._registry.clear()
+            calls.clear()
+            pipeline.run_prep(msg, time.monotonic() + 400)          # cached: no call at all
+            self.assertEqual(calls, [])
+
+    def test_short_clock_skips_phase_b(self):
+        from bot.prep import pipeline
+        calls = []
+
+        def fake(messages, **kw):
+            calls.append(kw.get("tag"))
+            return answer()
+        msg = {"type": "prep", "game_id": "gameD", "variants": [{"label": "x", "rules": TTT_RULES}]}
+        with mock.patch("bot.llm.complete", side_effect=fake):
+            pipeline.run_prep(msg, time.monotonic() + 20)
+        self.assertEqual(calls, ["classify"])
+
+    def test_cold_path_does_not_call_codegen(self):
+        from bot import specialist
+        start = {"type": "start", "game_id": "gameE", "game_name": "Grid", "variant": {"label": "std"},
+                 "rules": TTT_RULES, "study_seconds": 120}
+        with mock.patch("bot.prep.codegen.generate_simulators") as gen, \
+                mock.patch("bot.prep.codegen.repair_simulator") as rep, \
+                mock.patch("bot.llm.complete", return_value=answer()):
+            spec = specialist.for_start(start, time.monotonic() + 90)
+        gen.assert_not_called()
+        rep.assert_not_called()
+        self.assertEqual(spec.profile.family, "think_ahead")
+
+
 if __name__ == "__main__":
     unittest.main()
