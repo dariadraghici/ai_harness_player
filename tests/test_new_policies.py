@@ -3,7 +3,7 @@ import re
 import time
 import unittest
 
-from bot.policies import bulls_cows, choose, nim, pig
+from bot.policies import battleship, bulls_cows, choose, nim, pig, prisoners, rps
 
 
 class NewPolicyTests(unittest.TestCase):
@@ -52,4 +52,27 @@ class NewPolicyTests(unittest.TestCase):
                                        "Your score: 20 Opponent score: 18 Turn total: %d" % total}},
                              time.monotonic() + 8)[0]
             self.assertIn(row["action"], ("roll", "hold"))
+
+    def test_battleship_never_repeats_a_shot(self):
+        state = {"turn": {"observation": "YOUR SHOTS: fire c4 was a miss"}}
+        row = battleship.decide(state, time.monotonic() + 2)[0]
+        self.assertNotEqual(row["action"], "fire c4")
+        self.assertRegex(row["action"], r"^fire [a-f][1-6]$")
+
+    def test_rps_counters_constant_opponent(self):
+        observation = "Opponent: rock\nOpponent: rock\nOpponent: rock\n"
+        row = rps.decide({"turn": {"observation": observation}},
+                         time.monotonic() + 1)[0]
+        self.assertEqual(row["action"], "paper")
+
+    def test_prisoners_reacts_to_proven_defection(self):
+        observation = "Opponent: defect\nOpponent: defect\nOpponent: defect\n"
+        row = prisoners.decide({"turn": {"observation": observation}},
+                               time.monotonic() + 1)[0]
+        self.assertEqual(row["action"], "defect")
+
+    def test_router_selects_battleship_and_talk_games(self):
+        self.assertIs(choose("Battleship 6x6. Action format: fire c4."), battleship)
+        self.assertIs(choose("Prisoner's Dilemma: cooperate or defect."), prisoners)
+        self.assertIs(choose("Rock paper scissors, first to 5."), rps)
 

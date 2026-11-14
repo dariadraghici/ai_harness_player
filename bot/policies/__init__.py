@@ -1,9 +1,9 @@
 """Small deterministic policy registry used before simulator/model fallback."""
 
-from . import allocation, bulls_cows, generic, nim, pig, wordle
+from . import allocation, battleship, bulls_cows, generic, nim, pig, prisoners, rps, wordle
 
 
-POLICIES = (wordle, allocation, nim, bulls_cows, pig, generic)
+POLICIES = (wordle, allocation, nim, bulls_cows, pig, battleship, prisoners, rps, generic)
 
 
 def choose(rules_text, sample_turn=None):

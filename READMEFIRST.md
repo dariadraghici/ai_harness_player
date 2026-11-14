@@ -261,6 +261,9 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/policies/nim.py` | Sprague-Grundy Nim policy with atomic prep metadata | real |
 | `bot/policies/bulls_cows.py` | duplicate-aware four-digit candidate and entropy solver | real |
 | `bot/policies/pig.py` | bounded value-iteration hold-or-roll policy | real |
+| `bot/policies/battleship.py` | 6x6 fleet-placement density targeting policy | real |
+| `bot/policies/prisoners.py` | forgiving tit-for-tat Prisoner's Dilemma policy | real |
+| `bot/policies/rps.py` | seeded ensemble/frequency Rock Paper Scissors policy | real |
 | `bot/policies/generic.py` | grammar-first fallback policy for unknown variants | real |
 | `bot/policies/wordle.py` | registry adapter for the deterministic Wordle policy | real |
 | `tests/test_new_policies.py` | NIM, Bulls and Cows, Pig, and router regression tests | real |
