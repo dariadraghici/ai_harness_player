@@ -13,6 +13,40 @@ MAX_STEPS = 160
 MAX_GAMES = 96
 
 
+def _tactical(sim, observation, variant, seat):
+    """Find deterministic immediate wins and single-move blocks in the sample state."""
+    try:
+        state = sim.parse_observation(observation, variant, seat)
+        if not isinstance(state, dict) or sim.current_player(state) != seat:
+            return 0, 0
+        legal = sim.legal_actions(state)
+        wins, safe, threat = [], [], False
+        for action in legal:
+            child = sim.apply_action(state, action)
+            if sim.is_terminal(child):
+                values = sim.returns(child)
+                if values[seat] > values[1 - seat]:
+                    wins.append(action)
+                continue
+            if sim.current_player(child) != 1 - seat:
+                continue
+            threatened = False
+            for reply in sim.legal_actions(child):
+                after = sim.apply_action(child, reply)
+                if sim.is_terminal(after):
+                    values = sim.returns(after)
+                    if values[1 - seat] > values[seat]:
+                        threatened = True
+                        break
+            if threatened:
+                threat = True
+            else:
+                safe.append(action)
+        return len(wins), 1 if threat and len(safe) == 1 else 0
+    except Exception:
+        return 0, 0
+
+
 def _key(state):
     if isinstance(state, dict):
         state = {k: v for k, v in state.items() if k != "seed"}
@@ -137,8 +171,12 @@ def run(sim, payload):
     summary = {
         "games": 0, "wins": 0, "losses": 0, "draws": 0, "loops": 0,
         "illegal": 0, "errors": 0, "repeated_actions": 0, "steps": 0,
-        "seats": {"0": 0, "1": 0}, "matchups": {},
+        "tactical_wins": 0, "tactical_blocks": 0, "seats": {"0": 0, "1": 0},
+        "matchups": {},
     }
+    tactical_wins, tactical_blocks = _tactical(sim, observation, variant, 0)
+    summary["tactical_wins"] = tactical_wins
+    summary["tactical_blocks"] = tactical_blocks
     matchups = (("greedy", "random"), ("random", "greedy"), ("greedy", "greedy"))
     while summary["games"] < MAX_GAMES and time.monotonic() < deadline:
         ours, theirs = matchups[summary["games"] % len(matchups)]

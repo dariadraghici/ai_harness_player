@@ -105,6 +105,12 @@ def last_frame(exc, path):
 def main():
     mem_mb = int(sys.argv[1]) if len(sys.argv) > 1 else 0
     cpu_s = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+    nice = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+    if nice and hasattr(os, "nice"):
+        try:
+            os.nice(nice)
+        except OSError:
+            pass
     limits = set_limits(mem_mb, cpu_s)
 
     # Private handles first, then make the standard streams harmless.

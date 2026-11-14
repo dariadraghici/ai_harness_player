@@ -111,7 +111,8 @@ class Worker:
     SandboxError; close() and kill() never raise.
     """
 
-    def __init__(self, path=None, mem_mb=CHILD_MEMORY_MB, cpu_s=CHILD_CPU_S, name="", slot_wait_s=None):
+    def __init__(self, path=None, mem_mb=CHILD_MEMORY_MB, cpu_s=CHILD_CPU_S, name="",
+                 slot_wait_s=None, nice=0):
         """slot_wait_s: how long a start may wait for a free child slot. None: inside the timeout of
         the call. A number: that long, and the timeout of the call then counts from the start of
         the child (for batch work such as verification, where waiting for a slot is normal)."""
@@ -119,6 +120,7 @@ class Worker:
         self.mem_mb = int(mem_mb)
         self.cpu_s = int(cpu_s)
         self.slot_wait_s = slot_wait_s
+        self.nice = int(nice)
         self.name = name or (os.path.basename(self.path) if self.path else "job")
         self.proc = None
         self.starts = 0
@@ -152,7 +154,8 @@ class Worker:
             kwargs["start_new_session"] = True
         try:
             self.proc = subprocess.Popen(
-                [sys.executable, "-I", "-S", "-B", CHILD_FILE, str(self.mem_mb), str(self.cpu_s)],
+                [sys.executable, "-I", "-S", "-B", CHILD_FILE, str(self.mem_mb), str(self.cpu_s),
+                 str(self.nice)],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env=env, close_fds=True, **kwargs)
         except Exception as e:

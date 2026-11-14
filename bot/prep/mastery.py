@@ -24,7 +24,7 @@ def _empty_summary():
     return {
         "rounds": 0, "games": 0, "wins": 0, "losses": 0, "draws": 0,
         "loops": 0, "illegal": 0, "errors": 0, "repeated_actions": 0,
-        "steps": 0, "elapsed_s": 0.0,
+        "steps": 0, "elapsed_s": 0.0, "tactical_wins": 0, "tactical_blocks": 0,
     }
 
 
@@ -35,7 +35,8 @@ def _merge(total, result):
         return
     total["rounds"] += 1
     for key in ("games", "wins", "losses", "draws", "loops", "illegal", "errors",
-                "repeated_actions", "steps", "elapsed_s"):
+                "repeated_actions", "steps", "elapsed_s", "tactical_wins",
+                "tactical_blocks"):
         total[key] += summary.get(key, 0) or 0
 
 
@@ -49,6 +50,8 @@ def _playbook(spec, summary, verified):
         lines.append("ROBUSTNESS: %d illegal, %d simulator errors, %d loops, %d repeated actions." %
                      (summary["illegal"], summary["errors"], summary["loops"],
                       summary["repeated_actions"]))
+        lines.append("TACTICS: %d immediate wins and %d single-move blocks found in the verified sample state." %
+                     (summary.get("tactical_wins", 0), summary.get("tactical_blocks", 0)))
         if summary["games"]:
             lines.append("SELF-PLAY: %d wins, %d losses, %d draws; keep play diverse when values are close." %
                          (summary["wins"], summary["losses"], summary["draws"]))

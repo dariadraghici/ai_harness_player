@@ -179,6 +179,11 @@ class SimEngine(BaseEngine):
                    "legal_actions": [str(a) for a in legal] if isinstance(legal, list) and legal else None,
                    "variant": {"label": spec.label}, "budget_s": round(budget, 3),
                    "margin": config.CANDIDATE_MARGIN, "family": self.family}
+        try:
+            from .bg_compute import load_policy
+            payload["background"] = load_policy(spec)
+        except Exception:
+            payload["background"] = {}
         seat = turn_msg.get("seat") if turn_msg.get("seat") in (0, 1) else getattr(spec, "seat", None)
         if seat in (0, 1):
             payload["seat"] = seat           # else the job tries both seats and needs the observation to decide

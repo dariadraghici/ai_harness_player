@@ -125,7 +125,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | Path | What it is / what it is for | Status |
 |---|---|---|
 | `bot/__init__.py` | package marker of the harness | real |
-| `bot/main.py` | entrypoint (`python -u -m bot.main`): protocol loop, reader thread, workers, watchdog, shutdown | real |
+| `bot/main.py` | entrypoint (`python -u -m bot.main`): protocol loop, reader thread, workers, watchdog, pause-safe idle compute, shutdown | real |
 | `bot/interfaces.py` | contracts between modules: `GameProfile`, `Candidate`, `Decision`, `ChatLine`, `ChatContext`, `VariantSpec`, `Engine`, the generated-simulator contract, `FAMILIES` | real |
 | `bot/config.py` | all constants (deadlines, model, prices, limits) and `BOT_*` settings; `HARNESS_VERSION` | real |
 | `bot/ladder.py` | the fallback ladder L3 -> L2 -> L1; legal-action matching; `finalize` (filter + chat cleanup); watchdog `emergency` | real |
@@ -216,13 +216,14 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `tests/test_engines.py` | engine tests with hand-written fixture simulators (pile, tic-tac-toe, nim, chance game): `BOT_L3`, live check and "off for this game", live counters, looping and slow simulators (slice kept, no child left), solved cache, never loses at tic-tac-toe, nim against the nim-sum, MCTS ranking | real |
 | `bot/prep/codegen.py` | simulator generation: parallel candidates with different briefs, code extraction, static `ast` check (never executes code), files + manifest `candidates/index.json` (harness version and hash of the contract text; another one = no candidates), one repair round, `repair_simulator` (also called by `verify` with the failures of its checks) | real |
 | `bot/prep/verify.py` | verification, parent side: `verify_simulator` (one candidate through the job in a sandbox child -> `VerifyReport`), `compare` (differential test between candidates), `verify_variant` (verify all, repair rounds with rollback of a worse repair, fresh candidates when all fail, winner -> `simulator.py` + `verify.json`, `spec.verified`), `is_done` (harness version, contract, winner hash against the file on disk, live-check counters; sets `spec.verified` and this container's `spec.simulator_path`), `note_live` / `live_disabled` (counters of games with a failed live check, `live.json`), `turn_samples` (prep sample + stored real turns), `check_turn` (one real turn against a simulator, for the live check) | real |
-| `bot/prep/sandbox.py` | the only place where generated code runs: `Worker` (lazy, reusable, restarts after a kill), single calls (`call_simulator`) and jobs (`Worker.job`, `run_job`: one of our files runs next to the simulator), timeouts, at most 2 children, `kill_all`, `SandboxError` | real |
+| `bot/prep/sandbox.py` | the only place where generated code runs: `Worker` (lazy, reusable, restarts after a kill), single calls (`call_simulator`) and jobs (`Worker.job`, `run_job`: one of our files runs next to the simulator), timeouts, optional child niceness, at most 2 children, `kill_all`, `SandboxError` | real |
 | `bot/prep/mastery.py` | deadline-bounded post-verification self-play orchestration, aggregate strategy distillation, and `strategy.json` persistence | real |
 | `bot/prep/mastery_job.py` | standalone sandbox job that stress-tests verified simulators with generic random and greedy policies | real |
 | `bot/prep/verify_job.py` | the verification suite as a sandbox job (runs inside the child, standalone, never imported by the bot): load, sample parse, legal actions, contract behavior (no mutation, same result twice, JSON round trip), seeded random self-play with playouts per second, seed check (contract C11), stored real turns, traces for the differential test; mode `turn` for one turn | real |
 | `bot/prep/sandbox_child.py` | the program inside the child (`python -I -S`, standalone, never imported by the bot): limits itself (memory, CPU, files), hides stdout and stdin from generated code, serves load / call / job requests as JSON lines | real |
 | `bot/specialist.py` | per-variant registry: process -> memory -> same variant label (`lookup_by_label`) -> cold prep; `build_variant` (extension point); `check_simulator` settles the simulator claim of every spec loaded from memory or by label (verify.is_done, no child, once per spec); `for_start` also records our seat on the spec (`spec.seat`) for the engines | real |
 | `bot/engines/__init__.py` | package marker | real |
+| `bot/engines/bg_compute.py` | one-child, low-priority local compute between requests; instant pause/kill on live work and bounded atomic policy checkpoints | real |
 | `bot/engines/base.py` | `BaseEngine`, `NotAvailable`, registry family -> engine; `SimEngine`, the helper of every engine that runs on a verified simulator: switch `BOT_L3`, simulator file check, time slice (15 percent of the move clock), one fresh sandbox child per turn, live check result, "off for this game", per-variant live counters (`live.json`), `Candidate` building; `MixedEngine` (read_opponent, bluff): the seeded draw of one action from a mixed strategy and the candidates around it | real |
 | `bot/engines/search.py` | Think ahead, parent side: payload, cache of solved roots in `<variant_dir>/solved.json`, candidates (exact values when solved) | real |
 | `bot/engines/search_job.py` | Think ahead search as a sandbox job: iterative deepening alpha-beta with transposition table (exact leaves), MCTS (open loop, one possible world per playout) for chance, hidden values, one-player modules and large branching, alpha-beta then MCTS when the game is not solved | real |
@@ -251,6 +252,7 @@ during the event; falls back to a temp folder when not writable):
 <memory>/opponents/<team_id>.json                 opponent profiles
 <memory>/metrics/<container_id>.jsonl             one line per answer / game end
 <memory>/<game_id>/<rules_hash>/strategy.json     aggregate prep self-play findings and safety checks
+<memory>/<game_id>/<rules_hash>/background.json    bounded local idle-compute policy hints
 ```
 
 Locally (arena-lite through `scripts/practice.py`, all ignored by Git):

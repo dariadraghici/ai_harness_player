@@ -68,6 +68,60 @@ class Unsupported(Exception):
     pass
 
 
+def _preferred_order(la, payload):
+    preferred = []
+    for record in (payload.get("background") or {}).get("records", []):
+        for row in record.get("actions", []) if isinstance(record, dict) else []:
+            action = row.get("action") if isinstance(row, dict) else None
+            if action in la and action not in preferred:
+                preferred.append(action)
+    return preferred + [action for action in la if action not in preferred]
+
+
+def tactical(g, state, la):
+    """Return forced wins, or moves that remove an immediate opponent win."""
+    player = g.player(state)
+    if player not in (0, 1) or player != g.me:
+        return None
+    wins, safe = [], []
+    opponent_threat = False
+    for action in la:
+        try:
+            child = g.apply(state, action)
+            if g.terminal(child):
+                r = g.returns(child)
+                if r[g.me] > r[1 - g.me]:
+                    wins.append(action)
+                continue
+            next_player = g.player(child)
+            threatened = False
+            if next_player == 1 - g.me:
+                for reply in g.legal(child):
+                    after = g.apply(child, reply)
+                    if g.terminal(after):
+                        r = g.returns(after)
+                        if r[1 - g.me] > r[g.me]:
+                            threatened = True
+                            break
+            if threatened:
+                opponent_threat = True
+            else:
+                safe.append(action)
+        except Exception:
+            continue
+    if wins:
+        return {"ok": True, "algo": "tactical", "solved": True, "depth": 2,
+                "nodes": 0, "playouts": 0, "actions": [
+                    {"action": action, "value": 1.0, "bound": None} for action in wins
+                ]}
+    if opponent_threat and len(safe) == 1:
+        return {"ok": True, "algo": "tactical", "solved": False, "depth": 2,
+                "nodes": 0, "playouts": 0, "actions": [
+                    {"action": action, "value": 1.0, "bound": None} for action in safe
+                ]}
+    return None
+
+
 # ---------------------------------------------------------------- alpha-beta
 class AlphaBeta:
 
@@ -404,6 +458,14 @@ def run(sim, payload):
     try:
         root_key = g.key(state)
         cached = (payload.get("cache") or {}).get(root_key)
+        forced = None if (payload.get("unknown") or payload.get("both_seats") is False) else tactical(g, state, la)
+        if forced is not None:
+            forced["live"] = True
+            forced["root_key"] = root_key
+            forced["zero_sum"] = True
+            forced["branching"] = len(la)
+            return forced
+        la = _preferred_order(la, payload)
         if isinstance(cached, dict) and set(cached) == set(la):
             acts = sorted(({"action": a, "value": float(v), "bound": None} for a, v in cached.items()),
                           key=lambda x: -x["value"])

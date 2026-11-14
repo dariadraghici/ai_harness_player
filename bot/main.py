@@ -31,6 +31,7 @@ def run():
 
     from . import clock, config, ladder, llm, log, memory, metrics, opponents, specialist
     from .chat import decide, defense
+    from .engines.bg_compute import BackgroundCompute
     from .interfaces import VariantSpec
     from .prep import pipeline
 
@@ -44,6 +45,7 @@ def run():
             self.start_msg = None
             self.spec = None
             self.move_seconds = None
+            self.background = BackgroundCompute()
 
         # ------------------------------------------------------------ plumbing
         def reader(self):
@@ -95,6 +97,10 @@ def run():
                                level=info.get("level"), why=info.get("why"),
                                elapsed=round(elapsed, 3), watchdog=by_watchdog, source=source,
                                warning=bool(req.msg.get("warning")), llm=llm.usage())
+                if req.type == "prep" and not by_watchdog:
+                    self.background.start(specialist.all_specs())
+                elif req.type in ("start", "turn") and not by_watchdog:
+                    self.background.resume()
 
         def fallback(self, req):
             if req.type == "prep":
@@ -141,6 +147,7 @@ def run():
                 spec = specialist.for_start(msg, r.deadline - 3.0)
                 if self.start_msg is msg:
                     self.spec = spec
+                self.background.add_specs([spec])
                 ctx = defense.build_context(msg.get("chat"))
                 left = r.deadline - time.monotonic() - 1.0
                 r.result = protocol.ready(decide.opening_chat(spec, msg, ctx, min(5.0, left)))
@@ -172,10 +179,12 @@ def run():
             metrics.record("end", game_id=sm.get("game_id"), game_index=msg.get("game_index"),
                            result=msg.get("result"), reason=msg.get("reason"),
                            match_over=msg.get("match_over"), llm=llm.usage())
+            self.background.resume()
             # match_over does NOT end the container: keep waiting for the next start.
 
         def shutdown(self, why):
             log.info("shutting down: %s" % why)
+            self.background.stop()
             try:
                 opponents.save_all()
                 metrics.record("shutdown", why=why, llm=llm.usage("all"))
@@ -213,6 +222,8 @@ def run():
                     t = msg["type"]
                     if t == "shutdown":
                         self.shutdown("shutdown message")
+                    if t in ("start", "turn"):
+                        self.background.pause()
                     if self.pending is not None:
                         if t == "end":
                             log.warning("end arrived while %s pending; dropping it" % self.pending.type)
