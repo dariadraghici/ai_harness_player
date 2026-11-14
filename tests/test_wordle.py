@@ -78,4 +78,3 @@ class WordleTests(unittest.TestCase):
         finally:
             memory.reset_root_for_tests(None)
             shutil.rmtree(root)
-
