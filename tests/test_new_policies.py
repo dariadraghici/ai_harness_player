@@ -3,7 +3,8 @@ import re
 import time
 import unittest
 
-from bot.policies import battleship, bulls_cows, choose, nim, pig, prisoners, rps
+from bot.policies import (battleship, bulls_cows, choose, dots_boxes, hex, mini_chess,
+                          nim, pig, prisoners, rps)
 
 
 class NewPolicyTests(unittest.TestCase):
@@ -75,4 +76,26 @@ class NewPolicyTests(unittest.TestCase):
         self.assertIs(choose("Battleship 6x6. Action format: fire c4."), battleship)
         self.assertIs(choose("Prisoner's Dilemma: cooperate or defect."), prisoners)
         self.assertIs(choose("Rock paper scissors, first to 5."), rps)
+
+    def test_hex_takes_an_immediate_winning_move(self):
+        observation = "X at a1, X at a2, X at a3, X at a4, X at a5, X at a6"
+        row = hex.decide({"turn": {"observation": observation}},
+                         time.monotonic() + 1)[0]
+        self.assertEqual(row["action"], "place a7")
+
+    def test_dots_takes_a_free_box(self):
+        observation = "line a1-b1\nline a1-a2\nline b1-b2"
+        row = dots_boxes.decide({"turn": {"observation": observation}},
+                                time.monotonic() + 1)[0]
+        self.assertIn(row["action"], ("line a2-b2", "line b1-b2"))
+
+    def test_mini_chess_uses_exact_legal_action_spelling(self):
+        row = mini_chess.decide({"turn": {"legal_actions": ["b2b3", "a1a2"]}},
+                                time.monotonic() + 1)[0]
+        self.assertEqual(row["action"], "b2b3")
+
+    def test_router_selects_board_policies(self):
+        self.assertIs(choose("Gardner 5x5 mini chess, move b2b3"), mini_chess)
+        self.assertIs(choose("Hex 7x7, place c3"), hex)
+        self.assertIs(choose("Dots and Boxes 4x4, line a1-b1"), dots_boxes)
 
