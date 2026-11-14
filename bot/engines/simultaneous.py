@@ -26,6 +26,7 @@ Nothing is read from bot/opponents.py (it stores no actions); see the hand-over.
 import os
 
 from ..interfaces import Candidate
+from ..policies import allocation
 from . import base
 
 # ---------------------------------------------------------------- constants (proposed for bot/config.py)
@@ -40,6 +41,13 @@ class SimultaneousEngine(base.MixedEngine):
     def __init__(self):
         super().__init__()
         self._prior = {}                                  # (game_id, rules_hash) -> {action: weight}
+
+    def candidates(self, specialist, turn_msg, deadline):
+        if allocation.can_handle(getattr(specialist, "rules", ""), specialist.sample_turn) > 0:
+            return [Candidate(row["action"], row["score"], "allocation policy")
+                    for row in allocation.decide(
+                        {"spec": specialist, "turn": turn_msg}, deadline)]
+        return super().candidates(specialist, turn_msg, deadline)
 
     def game_ended(self, key, game):
         counts = game.extra.get("counts")
