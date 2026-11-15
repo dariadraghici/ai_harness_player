@@ -171,6 +171,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `scripts/arena_lite.py` | runs any arena-lite command from the repository root and adds `testgames/` to its games, without editing the kit | real |
 | `scripts/keyinfo.py` | budget and spend of the dev key | real |
 | `scripts/influence_report.py` | per family and tactic: attempts, hit rate, average quality drop, the control baseline, lift and a keep / drop / more-data verdict, from the `influence` / `influence_result` events in the metrics files (`--path`, `--json`, `--notes FILE.md` for the presentation) | real |
+| `scripts/replay_report.py` | from replays and metrics to four tables: results per FAMILY, why we lost (timeout / illegal / crash / outplayed), which ladder level answered with times and cost, and what prep built per variant; plus ready-made slide lines (`--json`, `--notes FILE.md`) | real |
 | `logo.png` | square team logo (512x512 PNG) for the Docker image | real |
 | `tests/__init__.py` | sets `BOT_FAKE_LLM=1` for all tests | real |
 | `tests/session_script.py` | `BotProc` (bot as child process) and the scripted arena session, reused by `check_image.py` | real |
@@ -191,6 +192,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `tests/test_solve.py` | prep pre-solving: roots near the sample position are stored, served from the cache, tied to the simulator hash, both seats, no prose in the file | real |
 | `tests/test_libs.py` | the engine subsystem: the network guard (allowlist, GET only, no game content in a query), discovery filters (hallucinated name, no wheel, too big, too new, LLM client), install (pip failure, timeout, no key to pip, bundle reuse), docs (introspection, prompt injection in a README, BM25), the adapter static check, the trust levels, and the runtime in a real sandbox child with a hand-written adapter (crash, hang, memory, illegal action, warm child, stdout stays byte-exact) | real |
 | `tests/test_testgames.py` | every game in `testgames/` is played with random moves: metadata, rules with an action format, legal actions, nonsense refused, termination, the taboo speech rule and the truth scoring (skipped without the kit) | real |
+| `tests/test_replay_report.py` | the replay report: loss classification, the per-family table, decisions from the metrics lines, prep rows and the slide lines | real |
 | `tests/env_probe_job.py` | a sandbox job that reports the child's environment (one-thread BLAS limits, no secrets) | real |
 | `testgames/nim_deal.py` | our own test game for arena-lite: Think ahead, Nim whose dealt heaps are written into the rules text, so the rules of `prep` and `start` differ (kit note K2); the check that prep work is reused for a new deal | real |
 | `testgames/rps_twist.py` | our own test game for arena-lite (`arena.core.Game` subclass): Read the opponent, simultaneous moves, payoff twist. New test games go here, in the same form | real |

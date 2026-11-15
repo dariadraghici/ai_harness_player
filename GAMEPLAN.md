@@ -204,10 +204,12 @@ luckydevs-1:
       document, "unknown" is worth more than an invention), `taboo.py`
       (a forbidden word in chat ends the game), `nim_deal.py` (the deal is
       embedded in the rules text, kit note K2).
-- [ ] Replay analysis tool: from match replays to a table of loss reasons
-      per family.
-- [ ] Cost and speed report: tokens per call, cache hits, answer time; idle
-      memory of a specialist with 12 alive at once.
+- [x] Replay analysis tool: `scripts/replay_report.py` groups every game of
+      ours by family and every loss by cause (timeout, illegal answer, crash,
+      outplayed), from the replays and the metrics lines.
+- [x] Cost and speed report: `scripts/replay_report.py` (tokens, cache hits,
+      answer times, model spend per game, peak RSS and children per turn) and
+      `scripts/batch_runner.py` (the same per match, against a baseline).
 - [ ] Memory under concurrency: many writers, cache versioning, reload.
 
 luckydevs-2:
@@ -252,8 +254,9 @@ luckydevs-1:
 
 - [ ] Demo viewer: a static page built from metrics and replays that shows
       how a specialist was built in prep and why each move was chosen.
-- [ ] Numbers for the slides: verification pass rate per game, level used
-      per decision, cost per match, answer times, results.
+- [x] Numbers for the slides: `scripts/replay_report.py --notes NOTES.md`
+      (verification pass rate, level per decision, cost, answer times,
+      results, and the weakest family to fix next).
 - [ ] Final freeze checks for `t3`.
 
 luckydevs-2:
