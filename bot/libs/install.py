@@ -233,11 +233,15 @@ def ensure(libs, deadline):
             specs = [_spec(l) for l in missing]
             # dependencies of a catalog row are baked, so --no-deps keeps the download to the library itself
             no_deps = all(l.source in ("catalog", "baked") for l in missing)
+            # The wheelhouse baked into the image first: in the arena that is the only source we are sure of.
+            # BOT_LIBS_NETWORK=off means no network for the subsystem at all, pip included.
+            from . import net
+            online = net.enabled()
             rc, _tail = _pip_install(specs, tmp, deadline, no_deps=no_deps, offline=True)
-            if rc != 0:
+            if rc != 0 and online:
                 rc, _tail = _pip_install(specs, tmp, deadline, no_deps=no_deps, offline=False)
             if rc != 0 and no_deps:
-                rc, _tail = _pip_install(specs, tmp, deadline, no_deps=False, offline=False)
+                rc, _tail = _pip_install(specs, tmp, deadline, no_deps=False, offline=not online)
             if rc != 0:
                 shutil.rmtree(tmp, ignore_errors=True)
                 return "", baked_ok, notes + ["pip failed for %s (rc=%s)" % (",".join(specs), rc)]
@@ -246,7 +250,8 @@ def ensure(libs, deadline):
             short = [l for l in missing if not ok.get(l.import_name)]
             if short and no_deps and time.monotonic() < deadline - MIN_INSTALL_S:
                 # it installed but does not import: a dependency of it is not in the image after all
-                rc, _tail = _pip_install([_spec(l) for l in short], tmp, deadline, no_deps=False, offline=False)
+                rc, _tail = _pip_install([_spec(l) for l in short], tmp, deadline, no_deps=False,
+                                         offline=not online)
                 if rc == 0:
                     ok = probe([l.import_name for l in missing], tmp)
                     got = [l for l in missing if ok.get(l.import_name)]

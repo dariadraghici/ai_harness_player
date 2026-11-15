@@ -126,8 +126,13 @@ def run(sim, payload):
                                              int(payload.get("worlds") or int(MAX_WORLDS * grow)), WORLD_SEEDS)
     if hyps:
         worlds = [C.world_state(state, paths, h) for h in hyps]
+        drawn = False
     else:
-        worlds, exact = [state], False
+        # No world could be read back from the simulator (it may only reveal the hidden value at a showdown,
+        # or overwrite it with the next deal). That is not a reason to give up: every sample below re-seeds the
+        # state, so the simulator draws the hidden value itself and the expected value still averages over the
+        # worlds - it is the WORLD LIST we cannot show, not the average.
+        worlds, exact, drawn = [state], False, True
     opp_share = float(payload.get("opp_share", OPP_SHARE))
     n = len(la)
     sums, sq, cnt = [0.0] * n, [0.0] * n, [0] * n
@@ -160,5 +165,6 @@ def run(sim, payload):
     rows = [{"action": la[i], "ev": evs[k], "se": ses[k], "p": probs[k], "n": cnt[i]} for k, i in enumerate(ok_idx)]
     rows.sort(key=lambda r: -r["p"])
     return {"ok": True, "live": True, "algo": "worlds", "actions": rows, "worlds": len(worlds),
+            "worlds_drawn": bool(drawn),
             "exact": bool(exact), "hidden": len(paths), "samples": samples, "spread": spread, "tau": tau,
             "best": max(evs)}

@@ -41,8 +41,15 @@ class BluffEngine(base.MixedEngine):
         pick = self.sample(spec, turn_msg, acts, probs)
         by = {r["action"]: r for r in rows}
         value = by[pick]["ev"]
-        head = "expected value over %d %s possible worlds, %d samples; mixed play (temperature %.2f)" % (
-            res.get("worlds", 0), "all" if res.get("exact") else "sampled", res.get("samples", 0), res.get("tau", 0.0))
+        if res.get("worlds_drawn"):
+            # the simulator only reveals the hidden value later (or deals over it), so the worlds cannot be
+            # listed; every sample re-seeds the state instead, which averages over them all the same
+            where = "worlds drawn by the simulator itself (they cannot be listed from this position)"
+        else:
+            where = "%d %s possible worlds" % (res.get("worlds", 0),
+                                               "all" if res.get("exact") else "sampled")
+        head = "expected value over %s, %d samples; mixed play (temperature %.2f)" % (
+            where, res.get("samples", 0), res.get("tau", 0.0))
         return self.mixed([{"action": r["action"], "p": r["p"],
                             "note": "EV %.2f +- %.2f" % (r["ev"], r["se"])} for r in rows], pick, value, head)
 

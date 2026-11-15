@@ -335,6 +335,33 @@ class InstallTests(Isolated):
         self.assertNotIn("--pre", seen["args"])
         self.assertLessEqual(seen["timeout"], install.PIP_TIMEOUT_S)
 
+    def test_with_the_network_off_pip_is_only_allowed_the_wheelhouse(self):
+        seen = []
+
+        def fake(args, timeout):
+            seen.append("--no-index" in args)
+            return (0 if "--no-index" in args else 1), ""
+        with mock.patch.dict(os.environ, {"BOT_LIBS_NETWORK": "off"}), \
+                mock.patch.object(install, "_run", fake), \
+                mock.patch.object(install, "probe", side_effect=[{"zzz": False}, {"zzz": True}]):
+            path, ok, notes = install.ensure([lib(import_name="zzz")], time.monotonic() + 40)
+        self.assertTrue(ok)
+        self.assertTrue(all(seen), "pip was allowed to reach the index with the network off")
+
+    def test_with_the_network_on_a_failed_offline_install_falls_back_to_the_index(self):
+        seen = []
+
+        def fake(args, timeout):
+            offline = "--no-index" in args
+            seen.append(offline)
+            return (1 if offline else 0), ""
+        with mock.patch.dict(os.environ, {"BOT_LIBS_NETWORK": "on"}), \
+                mock.patch.object(install, "_run", fake), \
+                mock.patch.object(install, "probe", side_effect=[{"zzz": False}, {"zzz": True}]):
+            path, ok, notes = install.ensure([lib(import_name="zzz")], time.monotonic() + 40)
+        self.assertTrue(ok)
+        self.assertEqual(seen[:2], [True, False])        # wheelhouse first, then the index
+
     def test_install_off_switch(self):
         with mock.patch.dict(os.environ, {"BOT_LIBS_INSTALL": "off"}), \
                 mock.patch.object(install, "probe", return_value={"zzz": False}), \
