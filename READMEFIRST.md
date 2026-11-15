@@ -190,9 +190,14 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `tests/test_engines_parallel.py` | warm worker per game, parallel parts, merges (function of the parts, not of arrival order), a failing part, idle watchdog, determinism against the old sequential code | real |
 | `tests/test_solve.py` | prep pre-solving: roots near the sample position are stored, served from the cache, tied to the simulator hash, both seats, no prose in the file | real |
 | `tests/test_libs.py` | the engine subsystem: the network guard (allowlist, GET only, no game content in a query), discovery filters (hallucinated name, no wheel, too big, too new, LLM client), install (pip failure, timeout, no key to pip, bundle reuse), docs (introspection, prompt injection in a README, BM25), the adapter static check, the trust levels, and the runtime in a real sandbox child with a hand-written adapter (crash, hang, memory, illegal action, warm child, stdout stays byte-exact) | real |
+| `tests/test_testgames.py` | every game in `testgames/` is played with random moves: metadata, rules with an action format, legal actions, nonsense refused, termination, the taboo speech rule and the truth scoring (skipped without the kit) | real |
 | `tests/env_probe_job.py` | a sandbox job that reports the child's environment (one-thread BLAS limits, no secrets) | real |
 | `testgames/nim_deal.py` | our own test game for arena-lite: Think ahead, Nim whose dealt heaps are written into the rules text, so the rules of `prep` and `start` differ (kit note K2); the check that prep work is reused for a new deal | real |
 | `testgames/rps_twist.py` | our own test game for arena-lite (`arena.core.Game` subclass): Read the opponent, simultaneous moves, payoff twist. New test games go here, in the same form | real |
+| `testgames/kuhn_bet.py` | our own test game, Bluff family: a Kuhn-poker shape with one hidden card each, check/bet/call/fold. The kit has no hidden-information game, so this is where the bluff path is played end to end | real |
+| `testgames/split_deal.py` | our own test game, Deals family: alternating offers over a pot that shrinks, with a PRIVATE multiplier per seat, so only the chat can bridge what a split is worth | real |
+| `testgames/doc_quiz.py` | our own test game, Truth family: the same document and question for both seats; a supported answer scores +2, `unknown` 0, an invention -1, and some questions have no answer in the document (then `unknown` scores +1) | real |
+| `testgames/taboo.py` | our own test game, Guardrails family: a trivial count race whose rules forbid one word in chat; `on_chat` ends the game at once if it is said, in any capitalisation, plural or possessive | real |
 
 ### luckydevs-2: chat and the language-centred families
 

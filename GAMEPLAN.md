@@ -196,11 +196,14 @@ Milestones:
 
 luckydevs-1:
 
-- [ ] Three test games for the families the practice arena does not cover:
-      a small betting game (Kuhn poker style), a negotiation or ultimatum
-      game, a simultaneous-move game with a payoff twist
-      (`testgames/rps_twist.py` is a first one). They are subclasses of
-      `arena.core.Game` (copy a practice game of the kit as a template).
+- [x] Test games for the families the practice arena does not cover, all
+      subclasses of `arena.core.Game` in `testgames/`, all played by
+      `tests/test_testgames.py`: `rps_twist.py` (simultaneous with a payoff
+      twist), `kuhn_bet.py` (betting with hidden cards), `split_deal.py`
+      (negotiation with private values), `doc_quiz.py` (answer from a
+      document, "unknown" is worth more than an invention), `taboo.py`
+      (a forbidden word in chat ends the game), `nim_deal.py` (the deal is
+      embedded in the rules text, kit note K2).
 - [ ] Replay analysis tool: from match replays to a table of loss reasons
       per family.
 - [ ] Cost and speed report: tokens per call, cache hits, answer time; idle

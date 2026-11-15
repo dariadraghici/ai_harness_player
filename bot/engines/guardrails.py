@@ -134,13 +134,19 @@ def prepare_profile(profile, rules_text):
         profile.speech_restrictions = " | ".join(unique)
 
 
+# A forbidden subject is forbidden in its plural and possessive forms too: a game that bans "banana" does not
+# allow "bananas" (testgames/taboo.py enforces exactly that, and a real Guardrails game is unlikely to be
+# kinder). The suffix is optional and still has to end the word, so "cat" does not match "category".
+_INFLECTION = r"(?:s|es|'s|s'|\u2019s)?"
+
+
 def _matches(text, terms):
     folded = str(text or "").casefold()
     for term in terms:
         words = [re.escape(x) for x in _normalize(term).split()]
         if not words:
             continue
-        pattern = r"(?<!\w)" + r"[\W_]+".join(words) + r"(?!\w)"
+        pattern = r"(?<!\w)" + r"[\W_]+".join(words) + _INFLECTION + r"(?!\w)"
         if re.search(pattern, folded, re.UNICODE):
             return True
     return False
