@@ -416,8 +416,21 @@ def slide_lines(rep):
                    "adapter in %d" % (verified, len(rep["prep"]), len(trusted)))
     weakest = sorted((a for a in fams.values() if a["games"] >= 2), key=lambda a: a["win_pct"])
     if weakest:
-        out.append("weakest family so far: %s (%d%% of %d game(s)) - fix it generically, it is not one game"
-                   % (weakest[0]["family"], round(weakest[0]["win_pct"]), weakest[0]["games"]))
+        w = weakest[0]
+        # How much of this is luck? A family is a run of games against an opponent we do not control, so the
+        # share of wins has a standard error of sqrt(p(1-p)/n) - about 8 points over 40 games. Printing the
+        # percentage alone sends somebody to "fix" a result that is a coin flip, which is exactly what the
+        # first read of this line did: read_opponent at 45 percent of 40 games is 18 wins, six tenths of one
+        # standard error from even, in a symmetric zero-sum game where an unpredictable opponent CANNOT be
+        # beaten by more than noise. The number to act on is one that is several standard errors low.
+        p = w["win_pct"] / 100.0
+        se = (p * (1.0 - p) / w["games"]) ** 0.5 if w["games"] else 0.0
+        sigmas = (0.5 - p) / se if se > 0 else 0.0
+        out.append("weakest family so far: %s (%d%% of %d game(s), %.1f standard error(s) below even)%s"
+                   % (w["family"], round(w["win_pct"]), w["games"], sigmas,
+                      " - fix it generically, it is not one game" if sigmas >= 2.0 else
+                      " - NOT yet distinguishable from chance at this many games; measure the family headless "
+                      "(scripts/engine_arena.py) before changing anything"))
     return out
 
 

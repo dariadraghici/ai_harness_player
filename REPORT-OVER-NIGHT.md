@@ -248,3 +248,52 @@ subsystem, mastery; plus the variant counts and the budget), `main.py` puts it o
 `scripts/replay_report.py` tables it with one line separating what we NEED to play from the elastic stages.
 After the round robin, "where did the 509 s go" is a table, for every game, from the replays - which is what
 part E asks for. Old prep lines without a split are ignored, not counted.
+
+Two real preps against a COLD memory dir, the arena's own 509 s hard clock, seconds per stage:
+
+| stage       | `kuhn_bet`, 2 variants | `nim_deal`, 4 variants | what it buys                          |
+| ----------- | ---------------------- | ---------------------- | ------------------------------------- |
+| `phase_a`   | 4.6                    | 7.1                    | profile and family of every variant   |
+| `chains`    | 79.2 (2/2 verified)    | 43.5 (4/4 verified)    | candidate simulators and verification |
+| `solve`     | 0.0                    | 28.4                   | pre-solved roots                      |
+| `libs`      | 151.7 (trust C)        | 60.6 (trust B x4)      | the engine subsystem                  |
+| `mastery`   | 263.1                  | 359.1                  | self-play to the deadline             |
+| **total**   | **498.6**              | **498.6**              | of a 509 s budget                     |
+
+What that says, and the reason it was worth the two runs:
+
+- **Everything we need in order to PLAY is finished after 84 s (and after 51 s with four variants).** The
+  other 83 percent of the budget buys depth. That is the intended shape - prep CPU is free and the arena
+  waits for `ready` either way - but it was an assumption until now.
+- **Four variants do not strain the budget.** I built a four-variant prep by hand (every game we own has
+  exactly two, and the contract does not cap the count) because that is the T3 case we cannot practise:
+  phase A took 7 s for four, all four verified in 43 s, and generation never came near its 270 s window. So
+  `PREP_PARALLEL_VARIANTS = 4` and `PHASE_B_END_FRACTION = 0.53` need no change.
+- **The engine subsystem is where the variance is**: 152 s for trust C on `kuhn_bet`, 61 s for trust B on all
+  four `nim_deal` variants. It stops as soon as it has nothing left to try, so it is not wasting the window -
+  but on a game where it returns C, that is time mastery would otherwise have had, and C is only evidence in
+  the prompt. That is the one number worth watching in the round robin, and it is now in the table.
+
+## 14. The "weakest family" line was sending us to fix a coin flip
+
+While reading the family table after all of this, the number that started section 11 turned out not to be a
+measurement at all. `read_opponent` at 45 percent of 40 games is 18 wins: **six tenths of one standard error
+below even** (a 40 game run has a standard error of about 8 points). And `rps_twist` is a symmetric zero-sum
+game, where an opponent who is merely unpredictable cannot be beaten by more than noise, no matter how good
+our engine is - exactly what the `random` baseline in section 11 shows, where 53 percent IS the ceiling.
+
+So the slide line now prints how far below even the family really is and only says "fix it generically" at two
+standard errors or more; otherwise it says the result is not yet distinguishable from chance and points at
+`scripts/engine_arena.py`, where a family can be measured in seconds instead of in forty games. Both branches
+have a test.
+
+This does not undo section 11: the exploitation cap was genuinely costing a quarter of the score against a
+readable opponent, and that was measured headless, not inferred from the 45 percent. It does mean the family
+was never the emergency the old line implied, and that the next person to read the report will not spend the
+morning on one.
+
+I also compared the two players that can own `rps_twist`, since the real games are played by
+`bot/policies/rps.py` and not by the engine at all: against `biased` the policy scores 0.883 and 0.783 and the
+engine 0.729 and 0.800; against `shifty` the policy 0.550 twice and the engine 0.700 and 0.550. At thirty
+games those differences are inside the noise, so I left the policy owning the game rather than change it on a
+coin flip.

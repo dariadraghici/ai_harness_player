@@ -178,6 +178,23 @@ class ReportTests(unittest.TestCase):
         self.assertIn("| Family |", md)
         self.assertTrue(md.isascii())
 
+    def test_the_weakest_family_line_says_whether_it_is_more_than_noise(self):
+        """45 percent of 40 games is 18 wins: six tenths of a standard error from even. The line used to send
+        somebody to fix a coin flip."""
+        self.write_replay("m1", [game(game_id="r", category="read", outcome="win") for _ in range(18)] +
+                          [game(game_id="r", category="read", outcome="loss") for _ in range(22)])
+        line = next(x for x in R.slide_lines(self.build()) if x.startswith("weakest family"))
+        self.assertIn("standard error(s) below even", line)
+        self.assertIn("NOT yet distinguishable from chance", line)
+        self.assertNotIn("fix it generically", line)
+
+    def test_a_family_that_really_is_losing_still_says_fix_it(self):
+        self.write_replay("m1", [game(game_id="r", category="read", outcome="win") for _ in range(5)] +
+                          [game(game_id="r", category="read", outcome="loss") for _ in range(45)])
+        line = next(x for x in R.slide_lines(self.build()) if x.startswith("weakest family"))
+        self.assertIn("fix it generically", line)
+        self.assertNotIn("NOT yet distinguishable", line)
+
     def test_empty_input_is_an_empty_report_not_a_crash(self):
         rep = self.build()
         self.assertEqual(rep["games"], 0)
