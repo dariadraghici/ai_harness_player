@@ -1,0 +1,167 @@
+# Overnight report (Sat night into Sun 15 Nov)
+
+Everything below is on `main` and pushed to `origin/main` as `luckydevs-3`, with your permission and your
+credentials. Eleven commits, `722a5cf..f561dfc`. `python -m unittest` is green at 558 tests, and the dev key
+went from 0.64 to 1.47 USD (4.53 left of 6).
+
+Read the three "please look at this" items first, then the rest as you like.
+
+## 1. Three things that need you
+
+1. **The Dockerfile change is NOT verified by a build.** Docker Desktop's WSL integration went down halfway
+   through the night (`docker ps` says "could not be found in this WSL 2 distro") and never came back, so I
+   could not build or run the image. The change installs the libraries of `bot/libs/requirements-core.txt` and
+   fills `/opt/wheelhouse` from `requirements-extra.txt`. What I did instead: every pin was resolved against
+   the real registry, installed into a clean Python 3.12 venv and imported (all ten), and the wheelhouse
+   download was run exactly as the Dockerfile runs it (39 MB, three wheels). Every Linux wheel is
+   manylinux_2_27 or 2_28, and the image is bookworm (glibc 2.36), so they fit. **Please build once before
+   the freeze**: `python scripts/build.py dev && python scripts/check_image.py dev`. If anything goes wrong,
+   `--build-arg BAKE_LIBS=0` gives you the old lean image and the engine subsystem simply falls back.
+   Size: site-packages comes to about 276 MB (scipy 139, numpy 70), so expect roughly a 400 MB image.
+2. **`origin/main` was failing its own test suite before I touched it** (commit `1c39a12`): five tests failed
+   because `python -m unittest` imports `bot.policies` while walking the repository, which pulls in
+   `bot.config` before `tests/__init__.py` sets `BOT_FAKE_LLM`, so the whole suite ran against a dead HTTP
+   endpoint instead of the fake model. Fixed in `807e054`. Worth telling whoever runs the checklist, because
+   RULES 25 ("python -m unittest passes") was quietly false.
+3. **I pushed `5229ef0` with the suite red** and fixed it immediately in `f561dfc`. The cause was a test of
+   mine that replaced `bot.llm.complete` for the whole process. No other commit went out red; I re-ran the
+   full suite before each.
+
+## 2. The engine subsystem (the big one, `722a5cf`)
+
+`bot/libs/`: discover -> install -> learn -> generate -> validate -> use. During prep, for an unknown game, it
+works out what kind of computation the game needs, finds a general-purpose library for it, installs it in
+isolation, reads the API of the installed package, has Haiku write an adapter, and measures how far that
+adapter can be trusted before a single move depends on it.
+
+| File | What it does |
+|---|---|
+| `capabilities.py` | ten capability tags from the profile prep already built; no game name ever leaves this file |
+| `net.py` | the only network door: GET only, host allowlist, redirects re-checked, byte and call caps, and queries that can only be built from a fixed capability vocabulary |
+| `catalog.json` | the curated library per capability as DATA, with our rank, a size cap, and the deny list of hosted-model clients |
+| `discover.py` | every name verified on the PyPI JSON API: wheel for this interpreter, not yanked, size cap, a settled release (it falls back to an older version), maturity for names we did not curate |
+| `install.py` | wheels only, wheelhouse before the network, `flock` on /memory, atomic publish, bundles shared between containers, import probe |
+| `docs.py` | local introspection of the installed package first (no network, authoritative), then the registry text; BM25-ranked chunks, cached; prompt injections stripped out of untrusted READMEs |
+| `adapter_gen.py` | Haiku writes `adapter.py`; our own `ast` check allows only the chosen libraries plus a fixed stdlib list, nothing at import time, no dangerous builtins; up to four rounds |
+| `adapter_job.py` | the only place an adapter or a library ever runs: a sandbox child |
+| `validate.py` | trust A (agrees with an exact search of our own simulator), B (legal, fast, unproven), C (advisory only), X (rejected) |
+| `engines/library.py` | the runtime: inside the move slice, one warm child per game; the trust level decides whether the rows are the move (A/B) or only evidence in the prompt (C) |
+
+Two invariants worth knowing: the bot process never imports a third-party library (only sandbox children do),
+and `bot/libs/` imports nothing at all until it is used. `BOT_ENGINE_SUBSYSTEM=off` restores the old behaviour
+exactly; with the fake model it is off by default.
+
+**Measured, with the real key.** On `rps_twist` prep found nashpy and scipy, installed what was missing in
+1.4 s, read the API by introspection, and Haiku wrote an adapter in one to three rounds; both variants came out
+at trust B (no exact cross-check is possible there), and the match played `RESULT: CLEAN`. On `guess_number` it
+chose python-sat the same way. One adapter used nashpy for the equilibrium, the other solved the 3x3 game in
+plain Python and said so in its docstring - the report records which, instead of claiming a library that is not
+used.
+
+**The one finding that matters beyond this feature:** importing numpy or scipy inside a sandbox child *failed*
+even with a 1.2 GB `RLIMIT_AS`, because OpenBLAS reserves address space per core. The sandbox child now pins
+every BLAS thread count to 1 (`bot/prep/sandbox.py` `CHILD_ENV`), which fixes it at 400 MB and also stops a
+library from taking CPU from the other specialists.
+
+## 3. Test games for the four families nobody could play (`e9a2c17`)
+
+The kit's practice games are three think-ahead/guessing games, so four of the seven families had never been
+played end to end. New in `testgames/`, each a subclass of `arena.core.Game`, all played by
+`tests/test_testgames.py` with random moves:
+
+- `kuhn_bet` - one hidden card each, check/bet/call/fold (Bluff)
+- `split_deal` - alternating offers over a shrinking pot, private multiplier per seat (Deals)
+- `doc_quiz` - same document and question for both seats; "unknown" is worth more than an invention (Truth)
+- `taboo` - a trivial count race whose rules forbid one word in chat; the arena's `on_chat` ends the game (Guardrails)
+
+What playing them found:
+
+- our outgoing filter matched a forbidden subject only as an exact word, so a game banning "banana" would have
+  ended on "bananas". Fixed, and "cat" still does not match "category".
+- the Truth path works: `doc_quiz` scored 10 of 12 with the real model, answering "unknown" where the document
+  is silent, and the engine's enforcement replaced one unsupported answer.
+- `taboo` was classified as `guardrails` by prep, and we won both games without ever saying the word.
+
+## 4. The classifier was sending document games to the wrong engine (`396aff9`)
+
+A simultaneous document game scored `read_opponent` 2 and `truth` 2, and the tie was broken **by the alphabet**.
+A cold container would have played a Truth game with the mixed-strategy engine. Now a decisive word is worth an
+extra point, a tie is broken by what the game is ABOUT, and "higher"/"lower" only votes for guessing when the
+sentence is about guessing ("a higher total is better" made Pig look like a guessing game). Measured over every
+rules text we have, 18 variants: the code-only evidence now names the right family 18 times out of 18, against
+15 before.
+
+## 5. Prompt caching: we were paying full price on every call (`8b81c82`)
+
+`scripts/replay_report.py` showed that of 2.2 million prompt tokens we had sent, **zero** were cached. Measured
+against the real gateway: two identical plain-text calls report `cached_tokens: 0`, the same calls with a
+`cache_control` block write 4842 tokens and then read them back. The gateway caches only what asks to be cached.
+
+The system message of a decision (rules, playbook, tactics) is identical for every turn of a game, so it is now
+sent as one marked block. In a real match every turn after the first read 1476 to 1608 cached tokens, which came
+out at 0.000249 USD against 0.000451 for a comparable uncached turn - about 45 percent less on a scored
+tie-break. A gateway that refuses content blocks gets one retry as plain text and is never asked again
+(`BOT_PROMPT_CACHE=off` disables it).
+
+## 6. The bluff engine now plays, because it was measured (`5229ef0`)
+
+bluff was off by default "until a practice game exists". It exists now, so:
+
+| | engine decides | model decides |
+|---|---|---|
+| arena practice vs the random bot (with prep, real key) | 5 won, 1 drawn, 1 lost of 7 | 1 won, 1 drawn, 4 lost of 6 |
+| headless vs random, no model at all | 23 won, 2 drawn, 15 lost of 40 | - |
+| the whole ladder vs random, headless | 11 won, 3 drawn, 6 lost of 20 | - |
+
+Every move answered, none illegal, 0.71 s per move. `L3_DEFAULT` now includes bluff and those numbers are in
+the comment next to it. Risk is bounded by what was already there: the engine only runs on a verified simulator
+and the live check switches it off for a game as soon as the simulator disagrees with the arena.
+
+## 7. Tools you can use in the morning
+
+```
+python scripts/replay_report.py                 # results per family, why we lost, decisions, prep, slide lines
+python scripts/replay_report.py --notes NOTES.md
+python scripts/demo_page.py                     # results/demo.html: one offline page for the demo
+python scripts/engine_arena.py --game kuhn_bet --a code --b random -n 30   # free, no model, seconds
+python scripts/influence_report.py              # which chat tactic beat its control
+```
+
+What `replay_report` says about the 193 games we have played so far: **zero warnings, zero timeouts, zero
+crashes, the watchdog never answered**; 33 percent of turns were answered by the engine, 63 percent by the
+model, 5 percent by the safe move; `read_opponent` (rps_twist, 45 percent of 40 games) is the weakest family.
+
+`demo_page.py` builds one self-contained HTML page (no network, no script tag, ASCII only): the ladder with our
+own shares, every prepared variant, one match move by move with the reason and the chat line of that very step,
+and the results per family. To make that honest, the turn metrics line now records the action we really sent,
+and the page drops a reason whose recorded action does not match the step.
+
+## 8. /memory under concurrency (`bb1f80f`)
+
+`tests/test_memory_concurrency.py` starts real subprocesses, one per "container", against one directory: no
+reader ever sees a half-written file, no temporary file is left behind, each container keeps its own metrics
+file intact, the shared solved-roots cache may lose an update (that only costs a cache hit) but never ends up
+corrupt, a variant of another harness version is ignored, and the install lock is exclusive between processes.
+
+## 9. Shared files I touched
+
+`bot/config.py` (cache prices and `PROMPT_CACHE_MIN_CHARS`, the subsystem switches), `bot/main.py` (phases for
+the subsystem, the action in the metrics line, the library result at `end`), `bot/ladder.py` (L3b, the library
+engine), `bot/resources.py` (close adapter children when idle), `Dockerfile`, `tests/__init__.py`,
+`bot/llm.py`, `bot/prep/{classify,pipeline,sandbox}.py`, `bot/engines/{base,bluff,search,simultaneous}.py`,
+`bot/chat/decide.py`, `READMEFIRST.md`, `GAMEPLAN.md` (ticked what is done, with where to look).
+
+## 10. What I did not do
+
+- **No Docker build** (see item 1). Nothing else is unverified.
+- **No prep sweep over every game.** Fresh prep has been run on tic_tac_toe, pig, guess_number, rps_twist,
+  nim_deal and kuhn_bet; doc_quiz, taboo and split_deal have only been played from a cold start.
+- **The subsystem's exact cross-check only works where our own simulator can prove a position** (sequential,
+  perfect information). For guessing and bluff variants the ceiling is trust B. A guessing-specific cross-check
+  (against our own guess engine) would raise it; I left it out rather than guess at it.
+- **Prep still uses its whole 600 s** because mastery self-play runs to the deadline, so a second prep of the
+  same game is not faster, it just does more self-play. That is deliberate (prep CPU is free), but it is not
+  the "second prep under 60 s" the brief imagined.
+- **`read_opponent` is our weakest family** (45 percent of 40 games) and I did not fix it. It is the obvious
+  next piece of work, and `scripts/engine_arena.py --game rps_twist` will tell you in seconds whether a change
+  helps.
