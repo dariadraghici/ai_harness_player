@@ -14,3 +14,16 @@ os.environ.setdefault("BOT_LOG_LEVEL", "warning")
 os.environ.setdefault("BOT_ENGINE_SUBSYSTEM", "off")
 os.environ.setdefault("BOT_LIBS_NETWORK", "off")
 os.environ.setdefault("BOT_LIBS_INSTALL", "off")
+
+# The settings above must hold whatever the import order was. `python -m unittest` walks the whole repository
+# before it imports this package, and a package of ours that imports bot.memory (bot/policies/__init__.py) drags
+# bot.config in first - with no BOT_FAKE_LLM in the environment yet, so FAKE_LLM would be False for the whole
+# suite and every fake model answer would turn into a real HTTP call. Re-reading the module fixes the order
+# dependency once, here, instead of in every test.
+import importlib
+import sys
+
+if "bot.config" in sys.modules:
+    importlib.reload(sys.modules["bot.config"])
+    if "bot.log" in sys.modules:
+        importlib.reload(sys.modules["bot.log"])
