@@ -636,6 +636,40 @@ class UnknownFamilyTests(Base):
                 os.environ["BOT_L3"] = old
 
 
+class SimulatorGateTests(Base):
+    """bot/ladder.py asked EVERY engine for a verified simulator before it asked for a move, and prep builds
+    one only for a family it can simulate (classify.SIMULATOR_FAMILIES). deals, guardrails and truth have 0
+    verified simulators between them, so those three engines could never run a single turn."""
+
+    def test_an_engine_that_searches_needs_a_simulator(self):
+        from bot.engines import search, simultaneous, bluff, guess
+        for mod_cls in (search.SearchEngine, simultaneous.SimultaneousEngine, bluff.BluffEngine,
+                        guess.GuessEngine):
+            self.assertTrue(base.needs_simulator(mod_cls()), mod_cls.__name__)
+
+    def test_an_engine_that_reads_the_rules_does_not(self):
+        from bot.engines import deals, truth
+        for cls in (deals.DealsEngine, truth.TruthEngine):
+            self.assertFalse(base.needs_simulator(cls()), cls.__name__)
+
+    def test_those_families_stay_off_until_measured_and_all_does_not_enable_them(self):
+        old = os.environ.get("BOT_L3")
+        try:
+            os.environ["BOT_L3"] = "all"
+            self.assertFalse(base.enabled("truth"))
+            self.assertFalse(base.enabled("deals"))
+            os.environ["BOT_L3"] = "think_ahead,truth"          # an explicit opt-in still works
+            self.assertTrue(base.enabled("truth"))
+            self.assertFalse(base.enabled("deals"))
+            os.environ.pop("BOT_L3")
+            self.assertFalse(base.enabled("truth"))              # and the default leaves them off
+        finally:
+            if old is None:
+                os.environ.pop("BOT_L3", None)
+            else:
+                os.environ["BOT_L3"] = old
+
+
 class SearchTests(Base):
 
     def test_pile_is_solved_with_exact_ranked_values(self):

@@ -68,6 +68,15 @@ SLICE_BACKSTOP_S = 1.5           # the parent kills the child this long after th
 # which lends an unclassified game the engine that fits the shape of its verified simulator. T3 brings nine
 # games nobody has played, so this is the one family we cannot practise and the one that must not be empty.
 L3_DEFAULT = "think_ahead,guessing,read_opponent,bluff,unknown"
+# truth and deals are deliberately NOT in L3_ALL, so BOT_L3=all does not turn them on. Their engines need no
+# simulator, so until the gate in ladder.py was fixed (it asked every engine for a verified simulator before
+# it asked for a move, and prep never builds one for a family of words) they could not run at all. Measured
+# the moment they could, on the only games of their families we have: the deals engine returns 0 candidates
+# on all 53 turns of split_deal, and the truth engine answers "unknown" on all 60 turns of doc_quiz, which is
+# a free-text game - it has no enumerated answers to find a supporting quote among, and the game rejects
+# "unknown". So they stay off, and BOT_L3="...,truth" opts in explicitly (enabled() honours any name in the
+# list, L3_ALL only decides what "all" means). guardrails has no entry on purpose: its engine raises
+# NotImplementedError by design, the family is played through the outgoing filter, not by a move policy.
 L3_ALL = ("think_ahead", "guessing", "read_opponent", "bluff", "unknown")
 JOB_ERRORS_OFF = 2               # simulator exceptions in jobs before "off for this game"
 WARM_CPU_S = 900                 # CPU backstop of a warm child (it lives for a whole game, not for one slice)
@@ -601,6 +610,18 @@ def register(engine: BaseEngine):
 def get_engine(family: str) -> Optional[BaseEngine]:
     _load_all()
     return _REGISTRY.get(family)
+
+
+def needs_simulator(engine) -> bool:
+    """Whether this engine can do nothing without a verified simulator.
+
+    Every engine that searches a game is a SimEngine and runs the simulator in a sandbox child, so without a
+    verified one it has nothing to search. The others (truth, deals) decide from the rules text and the turn
+    alone - and bot/ladder.py was asking all of them for a verified simulator before it asked for a move, so
+    those two engines never ran a single turn in a tournament: `deals`, `guardrails` and `truth` have 0
+    verified simulators between them, because a game of words is the kind prep cannot simulate.
+    """
+    return isinstance(engine, SimEngine)
 
 
 def resolve_engine(family: str, spec=None):

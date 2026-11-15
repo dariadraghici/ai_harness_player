@@ -510,6 +510,33 @@ class ChainTests(Isolated):
         self.assertEqual(d.action, "paper")
         self.assertEqual(st.ledger.promises[0]["status"], "kept")
 
+    def test_an_engine_that_needs_no_simulator_reaches_the_ladder_when_it_is_switched_on(self):
+        """The gate used to ask EVERY engine for a verified simulator, and prep builds none for a family of
+        words, so the deals and truth engines never ran a turn. Off by default, reachable when opted in."""
+        from bot import ladder
+        from bot.engines import base as eb
+        from bot.interfaces import Candidate
+        spec = make_spec("deals")                      # no simulator, no spec.verified: as prep leaves it
+        engine = mock.Mock(spec=eb.BaseEngine)
+        engine.candidates.return_value = [Candidate("offer 7", 0.0, "deals policy")]
+        start = {"match_id": "mg", "opponent": "opp", "game_index": 1, "seat": 0}
+        turn = {"game_index": 1, "turn": 1, "observation": "o", "legal_actions": ["offer 7", "offer 2"]}
+        old = os.environ.get("BOT_L3")
+        try:
+            with mock.patch("bot.engines.base.get_engine", return_value=engine), \
+                    mock.patch("bot.llm.complete", return_value=None):
+                os.environ["BOT_L3"] = "think_ahead"               # deals not in the list: no L3
+                d_off = ladder.decide_turn(spec, start, turn, time.monotonic() + 10)
+                os.environ["BOT_L3"] = "think_ahead,deals"         # opted in: the engine decides
+                d_on = ladder.decide_turn(spec, start, turn, time.monotonic() + 10)
+        finally:
+            if old is None:
+                os.environ.pop("BOT_L3", None)
+            else:
+                os.environ["BOT_L3"] = old
+        self.assertEqual(d_off.level, 1)                           # safe move, the engine was never asked
+        self.assertEqual((d_on.level, d_on.action), (3, "offer 7"))
+
     def test_the_ladder_asks_for_replies_and_keeps_time_for_the_model(self):
         from bot import config, ladder
         from bot.interfaces import Candidate

@@ -197,11 +197,16 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
             # An unclassified game keeps its verified simulator: resolve_engine lends it the engine that
             # fits the simulator's shape instead of dropping the whole L3 level (bot/engines/base.py).
             engine, engine_family = engines_base.resolve_engine(family, spec)
-            wordle_move = family == "guessing" and wordle.is_wordle_rules(spec.rules if spec else "")
-            if not wordle_move and (spec is None or not spec.verified or not spec.simulator_path):
-                raise engines_base.NotAvailable("no verified simulator")
             if engine is None:
                 raise engines_base.NotAvailable("no engine for family %s" % family)
+            wordle_move = family == "guessing" and wordle.is_wordle_rules(spec.rules if spec else "")
+            if engines_base.needs_simulator(engine):
+                if not wordle_move and (spec is None or not spec.verified or not spec.simulator_path):
+                    raise engines_base.NotAvailable("no verified simulator")
+            elif not engines_base.enabled(engine_family):
+                # An engine that needs no simulator was never gated by anything, because the simulator check
+                # above was the gate. It still has to earn its place by measurement, like every other family.
+                raise engines_base.NotAvailable("engine for %s is not in BOT_L3" % engine_family)
             if engine_family != family:
                 log.info("family %s has no engine of its own: borrowing the %s engine for this %s game" % (
                     family, engine_family, "simultaneous" if getattr(spec, "simultaneous", False) else "sequential"))
