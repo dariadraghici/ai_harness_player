@@ -129,7 +129,7 @@ python scripts/influence_report.py              # which chat tactic beat its con
 
 What `replay_report` says about the 193 games we have played so far: **zero warnings, zero timeouts, zero
 crashes, the watchdog never answered**; 33 percent of turns were answered by the engine, 63 percent by the
-model, 5 percent by the safe move; `read_opponent` (rps_twist, 45 percent of 40 games) is the weakest family.
+model, 5 percent by the safe move; `read_opponent` (rps_twist, 45 percent of 40 games) was the weakest family - see section 11.
 
 `demo_page.py` builds one self-contained HTML page (no network, no script tag, ASCII only): the ladder with our
 own shares, every prepared variant, one match move by move with the reason and the chat line of that very step,
@@ -162,6 +162,46 @@ engine), `bot/resources.py` (close adapter children when idle), `Dockerfile`, `t
 - **Prep still uses its whole 600 s** because mastery self-play runs to the deadline, so a second prep of the
   same game is not faster, it just does more self-play. That is deliberate (prep CPU is free), but it is not
   the "second prep under 60 s" the brief imagined.
-- **`read_opponent` is our weakest family** (45 percent of 40 games) and I did not fix it. It is the obvious
-  next piece of work, and `scripts/engine_arena.py --game rps_twist` will tell you in seconds whether a change
-  helps.
+- **`read_opponent` is now fixed and measured** (`aade149`, section 11) - that line in an earlier version of
+  this report said I had left it alone.
+
+## 11. `read_opponent`, the weakest family, was weak for a reason (`aade149`)
+
+This is the one piece of play strength I added after writing the rest of this report, so it is at the end.
+
+The family was at 45 percent of 40 games. Two things made it impossible to even look at:
+
+1. `scripts/engine_arena.py` asks `bot/policies/` first, exactly as `bot/ladder.py` does, and
+   `bot/policies/rps.py` claims `rps_twist` with 0.98. That is our ONLY `read_opponent` game, so the family
+   engine never answered a single turn there: changing its constants changed nothing, and I spent several runs
+   getting byte-identical results from five different settings before I noticed the 0.000 s per move.
+2. Neither baseline can see an opponent model. Against `random`, every action in a symmetric game has the same
+   EV, so the exploitation branch never even fires (RPS against a uniform opponent is a coin flip, and the
+   53 percent I measured is the theoretical maximum, not a weakness). Against `first`, one observation is
+   enough, so any setting scores 100 percent.
+
+So I added what was missing to measure it: `--no-policies`, which takes the registry out of the way reversibly,
+and two opponents in between - `biased` (60 percent of its mass on one action) and `shifty` (the same lean,
+moved every 3 turns, which is the case that punishes leaning on a stale pattern).
+
+With the engine actually playing, on `rps_twist` "9 rounds", a draw counting as a half, two seeds, 24-40 games:
+
+| exploitation cap `W_MAX`/`W_HALF` | vs `biased`  | vs `shifty`  |
+| --------------------------------- | ------------ | ------------ |
+| 0.5 / 8 (what we shipped)         | 0.354, 0.537 | 0.583, 0.633 |
+| 0.9 / 4 (now the default)         | 0.729, 0.800 | 0.550, 0.600 |
+
+The old cap was giving away about a quarter of the score against a stable pattern to save about 0.04 against a
+moving one, and 0.04 over 30 games is noise. The numbers are written next to the constants in
+`bot/engines/simultaneous_job.py`, and both stay overridable per payload (`BOT_EXPLOIT_MAX`,
+`BOT_EXPLOIT_HALF`), so retuning needs no code change. The cap itself stays: equilibrium always keeps mass, we
+are never a pure best response, and the test that asserts this now reads the constant from the job file instead
+of hardcoding 0.5.
+
+Two things worth knowing in the morning:
+
+- **The dedicated policy is still better than the engine here** (0.887 against `biased`, versus 0.800), so
+  `bot/policies/rps.py` rightly keeps `rps_twist`. The engine's numbers matter for a `read_opponent` game in
+  the tournament that no policy recognises, which is the case we cannot practise against.
+- **Anything hidden behind a dedicated policy is unmeasured by default.** `--no-policies` now exists; it would
+  be worth running it once per family to see where else a policy is answering for an engine we believe in.
