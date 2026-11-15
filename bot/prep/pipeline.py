@@ -47,6 +47,13 @@ PHASE_B_UNKNOWN_MIN_S = 150.0    # family unknown gets candidates only with this
 LIBS_SHARE = 0.6
 LIBS_MAX_S = 260.0
 
+# Where the prep budget really went, in seconds per stage, for the metrics line of this prep (main.py reads
+# it, scripts/replay_report.py tables it). Prep stages are elastic by design - mastery and the engine
+# subsystem take whatever is left - so "is the budget well spent?" is a question about numbers we were not
+# recording: every finished prep lasted 498 s and said nothing about what for. Same shape as
+# engines/base.LAST_RUN: one dict, overwritten by the next prep, never read for a decision.
+LAST_PREP = {}
+
 
 def run_prep(msg, deadline):
     """Prepare every variant of the prep message. Returns the list of specs done."""
@@ -56,6 +63,12 @@ def run_prep(msg, deadline):
 
 def _run_prep(msg, deadline):
     t_start = time.monotonic()
+    LAST_PREP.clear()
+
+    def stage(name, since):
+        LAST_PREP[name] = round(time.monotonic() - since, 2)
+        return time.monotonic()
+
     game_id = str(msg.get("game_id") or "unknown")
     game_name = str(msg.get("game_name") or "")
     variants = [v for v in (msg.get("variants") or []) if isinstance(v, dict)]
@@ -65,20 +78,29 @@ def _run_prep(msg, deadline):
     done = phase_a(game_id, game_name, variants, deadline)
     analyses = align(done)
     mark_chat_is_move(done)
-    t_a = time.monotonic()
+    t_a = stage("phase_a", t_start)
+    LAST_PREP["variants"] = len(variants)
+    LAST_PREP["ready"] = len(done)
     log.info("prep %s: phase A %d/%d variants ready in %.1fs" % (
         game_id, len(done), len(variants), t_a - t_start))
     run_chains(done, analyses, t_start + PHASE_B_END_FRACTION * budget, t_start + VERIFY_END_FRACTION * budget)
     log.info("prep %s: simulators done in %.1fs: %d/%d variants verified" % (
         game_id, time.monotonic() - t_a, sum(1 for s in done if s.verified), len(done)))
-    t_s = time.monotonic()
+    t_s = stage("chains", t_a)
+    LAST_PREP["verified"] = sum(1 for s in done if s.verified)
     solved = solve.solve_all(done, deadline - mastery.SAFETY_MARGIN_S)
     if solved:
         log.info("prep %s: pre-solved roots in %.1fs: %s" % (game_id, time.monotonic() - t_s, {
             h[:8]: (v.get("solved"), v.get("tried")) for h, v in solved.items()}))
+    t_l = stage("solve", t_s)
     run_libs(done, analyses, deadline)
+    t_m = stage("libs", t_l)
     mastery.refine(done, analyses, deadline)
+    stage("mastery", t_m)
+    LAST_PREP["total"] = round(time.monotonic() - t_start, 2)
+    LAST_PREP["budget"] = round(budget, 1)
     log.info("prep %s: strategy mastery persisted in %.1fs" % (game_id, time.monotonic() - t_a))
+    log.info("prep %s: budget split %s" % (game_id, LAST_PREP))
     return done
 
 

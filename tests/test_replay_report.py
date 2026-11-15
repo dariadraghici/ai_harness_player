@@ -137,6 +137,33 @@ class ReportTests(unittest.TestCase):
         self.assertEqual((row["trust"], row["library"], row["uses_library"]), ("A", "nashpy", True))
         self.assertIn("verification pass rate: 1 of 2", R.format_report(rep))
 
+    def test_the_prep_budget_split_is_read_and_tabled(self):
+        """Prep stages are elastic, so tuning the budget needs the numbers a real prep recorded."""
+        self.write_metrics([
+            {"kind": "prep", "game_id": "ttt", "container": "c1", "elapsed": 498.0,
+             "stages": {"phase_a": 5.0, "chains": 60.0, "solve": 1.0, "libs": 200.0, "mastery": 230.0,
+                        "total": 496.0, "budget": 509.0, "variants": 2, "ready": 2, "verified": 2}},
+            {"kind": "prep", "game_id": "pig", "container": "c1", "elapsed": 100.0,
+             "stages": {"phase_a": 9.0, "chains": 20.0, "solve": 3.0, "libs": 0.0, "mastery": 60.0,
+                        "total": 92.0, "budget": 509.0}},
+            {"kind": "prep", "game_id": "old", "container": "c1", "elapsed": 40.0},      # before the split existed
+        ])
+        b = self.build()["prep_budget"]
+        self.assertEqual(b["preps"], 2)                       # the line without a split is not counted
+        self.assertAlmostEqual(b["stages"]["phase_a"]["mean"], 7.0)
+        self.assertAlmostEqual(b["stages"]["mastery"]["max"], 230.0)
+        self.assertEqual(sorted(b["games"]), ["pig", "ttt"])
+        text = R.format_report(self.build())
+        self.assertIn("PREP BUDGET (2 prep(s)", text)
+        self.assertIn("mastery", text)
+        self.assertIn("everything we NEED to play", text)
+
+    def test_no_recorded_split_is_not_a_crash_and_prints_nothing(self):
+        self.write_metrics([{"kind": "prep", "game_id": "g", "container": "c1", "elapsed": 10.0}])
+        rep = self.build()
+        self.assertIsNone(rep["prep_budget"])
+        self.assertNotIn("PREP BUDGET", R.format_report(rep))
+
     def test_slide_lines_and_markdown(self):
         self.write_replay("m4", [game("ttt", "think", "win"), game("rps", "read", "loss", reason="points"),
                                  game("rps", "read", "loss", reason="points")])

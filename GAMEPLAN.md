@@ -280,7 +280,17 @@ luckydevs-3:
       `scripts/engine_arena.py` measures whether an engine is worth its slice
       without the arena and without the model. Fresh prep has been run on
       tic_tac_toe, pig, guess_number, rps_twist, nim_deal and kuhn_bet.
-- [ ] Prep time budget tuning; behavior on a game of an unknown family.
+- [x] Behavior on a game of an unknown family: prep already built and verified
+      a simulator for it and nothing asked for it, because no engine is
+      registered under "unknown". `base.resolve_engine` now lends such a game
+      the engine that fits the shape of its simulator (mixed for a simultaneous
+      step, search otherwise). With the family of a real variant forced to
+      unknown: nim_deal 0.250 -> 1.000, tic_tac_toe 0.625 -> 0.938, and 46 / 58
+      turns the engine used to leave unanswered are answered.
+- [x] Prep time budget tuning: the split per stage is now RECORDED on the prep
+      metrics line (`pipeline.LAST_PREP`) and tabled by `replay_report.py`, so
+      the round robin itself says where the 509 s went. Every prep since mastery
+      exists runs to the hard deadline and could not say what for.
 
 ## Part F: pitfalls
 

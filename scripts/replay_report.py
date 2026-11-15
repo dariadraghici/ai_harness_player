@@ -213,6 +213,31 @@ def decisions(rows):
     return out
 
 
+def prep_budget(rows):
+    """Where the prep budget went, per stage, from the `prep` metrics lines (bot/prep/pipeline.py LAST_PREP).
+
+    The prep stages are elastic on purpose - mastery and the engine subsystem take whatever the simulators
+    leave - so the only honest way to tune the budget is to read what the stages really took in a prep that
+    had the arena's clock, not to reason about the fractions.
+    """
+    preps = [r for r in rows if r.get("kind") == "prep" and isinstance(r.get("stages"), dict)]
+    if not preps:
+        return None
+    stages = ("phase_a", "chains", "solve", "libs", "mastery")
+    out = {"preps": len(preps), "stages": {}, "elapsed": [], "games": {}}
+    for st in stages:
+        vals = [float(r["stages"][st]) for r in preps if isinstance(r["stages"].get(st), (int, float))]
+        if vals:
+            out["stages"][st] = {"mean": sum(vals) / len(vals), "max": max(vals), "n": len(vals)}
+    for r in preps:
+        total = r["stages"].get("total")
+        if isinstance(total, (int, float)):
+            out["elapsed"].append(float(total))
+        g = str(r.get("game_id") or "unknown")
+        out["games"].setdefault(g, []).append(r["stages"])
+    return out
+
+
 # ---------------------------------------------------------------- prep artifacts
 def read_prep(memory_dirs):
     """One row per prepared variant: what prep built and what it measured."""
@@ -339,6 +364,21 @@ def format_report(rep):
         out.append("  verification pass rate: %d of %d variant(s) (%d%%)" % (
             verified, len(rep["prep"]), round(100.0 * verified / max(1, len(rep["prep"])))))
 
+    if rep.get("prep_budget"):
+        b = rep["prep_budget"]
+        out.append("")
+        out.append("PREP BUDGET (%d prep(s) with a recorded split)" % b["preps"])
+        rows = [[st, "%.1f" % v["mean"], "%.1f" % v["max"], str(v["n"])] for st, v in b["stages"].items()]
+        out.append(table(["Stage", "Mean s", "Max s", "Preps"], rows, ["left", "right", "right", "right"]))
+        if b["elapsed"]:
+            out.append("  prep wall clock: mean %.0f s, max %.0f s of the %d s the contract gives" % (
+                sum(b["elapsed"]) / len(b["elapsed"]), max(b["elapsed"]), 600))
+        essential = sum(b["stages"].get(st, {}).get("mean", 0.0) for st in ("phase_a", "chains"))
+        elastic = sum(b["stages"].get(st, {}).get("mean", 0.0) for st in ("solve", "libs", "mastery"))
+        if essential or elastic:
+            out.append("  everything we NEED to play (profile, simulator) takes %.0f s; the elastic stages "
+                       "(pre-solving, libraries, self-play) take %.0f s" % (essential, elastic))
+
     out.append("")
     out.append("FOR THE SLIDES")
     for line_text in rep["slides"]:
@@ -383,8 +423,10 @@ def slide_lines(rep):
 
 def build(replay_dirs, metric_dirs, memory_dirs, team=TEAM):
     rows = read_replays(replay_dirs, team)
+    metric_rows = read_metrics(metric_dirs)
     rep = {"team": team, "rows": rows, "games": len(rows), "families": by_family(rows),
-           "decisions": decisions(read_metrics(metric_dirs)), "prep": read_prep(memory_dirs)}
+           "decisions": decisions(metric_rows), "prep": read_prep(memory_dirs),
+           "prep_budget": prep_budget(metric_rows)}
     rep["slides"] = slide_lines(rep)
     return rep
 

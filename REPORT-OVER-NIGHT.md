@@ -205,3 +205,46 @@ Two things worth knowing in the morning:
   the tournament that no policy recognises, which is the case we cannot practise against.
 - **Anything hidden behind a dedicated policy is unmeasured by default.** `--no-policies` now exists; it would
   be worth running it once per family to see where else a policy is answering for an engine we believe in.
+
+## 12. The game nobody has played: an unknown family now plays at L3 (`7c777bf`)
+
+GAMEPLAN part E says T3 brings nine games nobody has played and that generality decides. The unclassifiable
+game was the hole in that, and it was a silent one. Prep DOES build and verify a simulator for a game whose
+family it cannot name (`prep/pipeline.py`, `PHASE_B_UNKNOWN_MIN_S`), and then nothing ever asked for it,
+because no engine is registered under `"unknown"`: the whole L3 level was skipped and the game was played by a
+single model call, with a verified simulator of it sitting unused in `/memory`.
+
+`base.resolve_engine()` now lends such a game the engine that fits the shape of its simulator: the
+mixed-strategy engine for a simultaneous step, the search engine otherwise - and the search job already had a
+mode for a simulator whose outcomes it cannot score (MCTS instead of alpha-beta), written for exactly this
+case and never reached. Measured by forcing the family of a real prepared variant to `unknown`, engine against
+random, 16 games, a draw counting as a half:
+
+| game                 | fallback off (what shipped) | on                  |
+| -------------------- | --------------------------- | ------------------- |
+| `nim_deal` 3 heaps   | 0.250, 46 turns unanswered  | 1.000, 0 unanswered |
+| `tic_tac_toe` 3x3    | 0.625, 58 turns unanswered  | 0.938, 0 unanswered |
+
+`"unknown"` is a member of `L3_ALL` and of `L3_DEFAULT`, so `BOT_L3` without it restores the old behaviour
+exactly, and a test asserts that. The borrow is safe in both directions: the mixed engine probes the live
+simulator and returns nothing when the step is not simultaneous after all, and a job that cannot read the game
+answers with an error, which costs that one turn and drops us down the ladder as today.
+
+While looking for other engines nobody asks, I audited every prepared game with the new `--no-policies`
+switch. Only two families are shadowed by a dedicated policy: `read_opponent` (section 11) and `guessing`,
+where `bot/policies/wordle.py` answers for `guess_number` - and there it is harmless, the policy and the
+`GuessEngine` score identically (0.625 and 0.646 on two seeds; the same moves).
+
+## 13. Prep time budget: now recorded instead of argued about
+
+The last open item on my GAMEPLAN line. Every prep we have run since mastery exists takes the whole budget -
+498 to 501 s, 13 of the 48 preps in `/memory/metrics` - and the metrics line said nothing about what for,
+while the early preps (before mastery) finished in 34 to 67 s. The stages are elastic by design: mastery and
+the engine subsystem take whatever the simulators leave. So the budget cannot be tuned from the fractions in
+the source, only from what the stages really take under the arena's own clock.
+
+`pipeline.LAST_PREP` now records the split per stage (phase A, simulator chains, pre-solving, the engine
+subsystem, mastery; plus the variant counts and the budget), `main.py` puts it on the `prep` metrics line, and
+`scripts/replay_report.py` tables it with one line separating what we NEED to play from the elastic stages.
+After the round robin, "where did the 509 s go" is a table, for every game, from the replays - which is what
+part E asks for. Old prep lines without a split are ignored, not counted.

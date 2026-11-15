@@ -539,6 +539,30 @@ class CodegenTests(TempMemory):
             pipeline.run_prep(msg, time.monotonic() + 400)          # cached: no call at all
             self.assertEqual(calls, [])
 
+    def test_the_prep_budget_split_is_recorded_per_stage(self):
+        """Every prep since mastery exists runs to the hard deadline and said nothing about what for.
+        pipeline.LAST_PREP is what main.py puts on the prep metrics line and replay_report tables."""
+        from bot.prep import pipeline
+        msg = {"type": "prep", "game_id": "gameBudget", "game_name": "Grid",
+               "variants": [{"label": "std", "rules": TTT_RULES, "sample_turn": TTT_SAMPLE}]}
+
+        def fake(messages, **kw):
+            if "TASK: classify" in messages[-1]["content"]:
+                return answer()
+            return fenced(GOOD_MODULE)
+        with mock.patch("bot.llm.complete", side_effect=fake), \
+                mock.patch("bot.prep.pipeline.mastery.refine", return_value={}):
+            pipeline.run_prep(msg, time.monotonic() + 400)
+        split = dict(pipeline.LAST_PREP)
+        for key in ("phase_a", "chains", "solve", "libs", "mastery", "total", "budget", "variants",
+                    "ready", "verified"):
+            self.assertIn(key, split)
+        stages = sum(split[k] for k in ("phase_a", "chains", "solve", "libs", "mastery"))
+        self.assertLessEqual(stages, split["total"] + 0.5)         # the stages account for the whole prep
+        self.assertAlmostEqual(stages, split["total"], delta=0.5)  # and nothing is counted twice
+        self.assertEqual((split["variants"], split["ready"]), (1, 1))
+        self.assertGreaterEqual(split["budget"], split["total"] - 0.5)
+
     def test_short_clock_skips_phase_b(self):
         from bot.prep import pipeline
         calls = []
