@@ -65,6 +65,22 @@ STDERR_KEEP_BYTES = 4000         # tail of the child's stderr kept for error mes
 
 CHILD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sandbox_child.py")
 
+# The child's whole environment, besides PATH: the model key and everything else of ours stays outside.
+# The thread limits are not a detail. A numeric library (numpy, scipy) reserves ADDRESS SPACE per core for its
+# BLAS arenas, and the child caps its address space with RLIMIT_AS, so on a many-core host the import of scipy
+# dies with "OpenBLAS error: Memory allocation still failed" even with a 1.2 GB cap. One thread per child also
+# keeps a library from taking CPU from the other specialists of ours that are alive at the same time
+# (ARENA-CONTRACT 2.1: 2 CPUs per container).
+CHILD_ENV = {
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "NUMEXPR_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+    "MALLOC_ARENA_MAX": "2",
+    "PYTHONDONTWRITEBYTECODE": "1",
+}
+
 _EOF = object()
 _TOO_LONG = object()
 _live = set()
@@ -211,7 +227,7 @@ class Worker:
             deadline = time.monotonic() + START_TIMEOUT_S
         self._has_slot = True
         self._stopped = ""
-        env = {"PATH": os.environ.get("PATH", "")}
+        env = dict(CHILD_ENV, PATH=os.environ.get("PATH", ""))
         for k in ("SYSTEMROOT", "SystemRoot", "TEMP", "TMP"):      # Windows needs these to start Python
             if k in os.environ:
                 env[k] = os.environ[k]

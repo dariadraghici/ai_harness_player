@@ -21,6 +21,7 @@ from .chat import decide as decide_mod
 from .chat import defense, offense
 from .engines import base as engines_base
 from .engines import guardrails
+from .engines import library as engines_library
 from .engines import wordle
 from .interfaces import Decision
 
@@ -212,6 +213,30 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
         log.exception("L3 failed, going down")
         candidates = []
 
+    # ---- L3b: the engine subsystem (bot/libs/): a generated adapter on an installed open-source library.
+    # It runs when our own family engine produced nothing, and what its output is worth is the trust level
+    # prep measured: A or B are candidates like any other, C is only evidence in the prompt.
+    advice = ""
+    if not candidates:
+        try:
+            level, rows = engines_library.candidates(spec, turn_msg, deadline - 2.0 - config.LLM_RESERVE_S)
+            keep = []
+            for c in rows:
+                a = match_legal(c.action, usable) if usable else c.action
+                if a and (rejected is None or norm(a) != norm(rejected)):
+                    c.action = a
+                    keep.append(c)
+            if keep and level in ("A", "B"):
+                keep.sort(key=lambda c: c.value, reverse=True)
+                candidates = _within_margin(keep)
+                best = finalize(Decision(candidates[0].action, offense.fallback_line(family), 3,
+                                         "library engine (trust %s)" % level), spec, usable, rejected)
+                report(best)
+            elif keep:
+                advice = engines_library.advisory_text(keep)
+        except Exception:
+            log.exception("L3b (library engine) failed, going down")
+
     # ---- L2: one model call for move + chat (also picks among L3 candidates)
     t_l2 = time.monotonic()
     timing["l3_s"] = round(t_l2 - t_l3, 4)
@@ -223,7 +248,7 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
         elif (warning and left <= 10.0) or left < 4.0:
             log.warning("L2 skipped: warning/deadline emergency with %.1fs left" % left)
         else:
-            res = decide_mod.decide(spec, start_msg, turn_msg, ctx, candidates, usable, timeout)
+            res = decide_mod.decide(spec, start_msg, turn_msg, ctx, candidates, usable, timeout, advice)
             if res:
                 if candidates:
                     allowed = [c.action for c in candidates]

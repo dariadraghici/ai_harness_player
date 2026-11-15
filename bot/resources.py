@@ -380,6 +380,11 @@ def _apply(ph):
                 engines_base.shutdown_workers()
             except Exception:
                 log.exception("resources: warm workers not closed")
+            try:
+                from .engines import library as engines_library
+                engines_library.shutdown_workers("phase idle")
+            except Exception:
+                log.exception("resources: adapter workers not closed")
             sandbox.kill_all("idle")             # nothing may be alive between games
         else:
             sandbox.set_capacity(max(1, plan("prep_verify" if ph == "prep" else "turn_search").children))

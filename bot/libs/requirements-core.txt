@@ -1,0 +1,14 @@
+# The core tier of bot/libs/catalog.json: installed INTO the image, so the engine subsystem works with no
+# network at all (the arena may not reach a package index). Pinned for a reproducible image; every pin was
+# checked against the registry by bot/libs/discover.py (wheel for cp312 manylinux x86_64, not yanked, settled).
+# The bot process never imports any of these: only sandbox children do (bot/libs/adapter_job.py).
+numpy==2.5.4
+scipy==1.18.1
+nashpy==0.0.43
+python-sat==1.9.dev17
+rank-bm25==0.2.2
+rapidfuzz==3.14.6
+Unidecode==1.4.0
+regex==2026.9.29
+chess==1.10.0
+treys==0.1.8

@@ -1,0 +1,6 @@
+# The second tier: NOT installed, only downloaded into /opt/wheelhouse, so bot/libs/install.py can install one
+# of them into /memory with --no-index when a game needs it, even with no network. Keep this list small: every
+# wheel here is image size that most games never use.
+pokerkit==0.7.7
+networkx==3.7
+z3-solver==5.3.3.0

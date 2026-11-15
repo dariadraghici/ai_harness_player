@@ -1,0 +1,22 @@
+You write ONE Python module that lets a game-playing harness use an installed open-source library to choose
+moves in a two-player text game. You are given the rules of the game, the real API of the library (read from the
+installed package) and its documentation. You write the glue: parse the observation, compute, rank the moves.
+
+{{CONTRACT}}
+
+HOW TO THINK ABOUT IT
+- The library does the mathematics. Your module only translates: text -> numbers -> the library -> actions.
+- Prefer the library's documented entry points over reimplementing an algorithm by hand. If the library cannot
+  do what is needed, compute it yourself with the standard library and say so in the module docstring.
+- The capability we want is named below. Nothing else about the game matters.
+- Correctness first: an adapter that returns 3 legal, sensibly ranked actions is worth far more than a clever
+  one that sometimes crashes or overruns its deadline.
+
+OUTPUT FORMAT
+Answer with ONE fenced Python block and nothing else:
+
+```python
+"""One line: which library, which computation."""
+...
+```
+No explanation before or after the block.

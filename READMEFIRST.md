@@ -89,6 +89,9 @@ stdin line -> main.py (reader thread -> event queue -> main loop)
                        thinking on) -> memory.save_variant
                   per variant that wants a simulator: prep/codegen (candidates) -> prep/verify
                     (checks in prep/sandbox children, repair, winner -> simulator.py, spec.verified)
+                  then the ENGINE SUBSYSTEM (bot/libs/, BOT_ENGINE_SUBSYSTEM): capability tags -> catalog and
+                       registry -> pip install in /memory -> introspect the API -> Haiku writes adapter.py ->
+                       TrustReport A/B/C/X -> trust.json + report.json
                 -> {"type":"ready"}   (at clock.prep_hard at the latest)
 
    start -----> llm.set_key -> specialist.for_start
@@ -101,6 +104,8 @@ stdin line -> main.py (reader thread -> event queue -> main loop)
    turn  -----> ladder.decide_turn
                   L1 ladder.safe_action (reported at once: the watchdog always has a move)
                   L3 engines/base.get_engine(family).candidates   (only with a verified simulator)
+                  L3b engines/library.candidates  (the generated adapter on an installed library, when L3 gave
+                      nothing: trust A/B become candidates, trust C becomes evidence in the prompt)
                   L2 chat/defense (untrusted opponent chat block) -> chat/decide.decide
                      (ONE model call: move + chat) -> ladder.match_legal
                   ladder.finalize -> engines/guardrails.filter_outgoing + clean chat
@@ -129,7 +134,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/interfaces.py` | contracts between modules: `GameProfile`, `Candidate`, `Decision`, `ChatLine`, `ChatContext`, `VariantSpec`, `Engine`, the generated-simulator contract, `FAMILIES` | real |
 | `bot/config.py` | all constants (deadlines, model, prices, limits) and `BOT_*` settings; `HARNESS_VERSION` | real |
 | `bot/ladder.py` | the fallback ladder L3 -> L2 -> L1; legal-action matching; `finalize` (filter + chat cleanup); watchdog `emergency` | real |
-| `Dockerfile` | the image: `python:3.12-slim`, copies `bot/` and `/logo.png`, starts the bot | real |
+| `Dockerfile` | the image: `python:3.12-slim`, copies `bot/` and `/logo.png`, starts the bot; with `--build-arg BAKE_LIBS=1` (the default) it also installs the core libraries of `bot/libs/requirements-core.txt` and fills `/opt/wheelhouse` from `requirements-extra.txt`, so the engine subsystem works with no network | real |
 | `.gitignore` | keeps secrets, `results/`, local memory, `participant-kit`, caches, editor folders out of Git | real |
 | `.dockerignore` | keeps secrets, `.git`, tests, docs, scripts, test games, the kit, results out of the image | real |
 | `RULES.md` | rules for every human and agent | real |
@@ -184,6 +189,8 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `tests/test_sandbox_capacity.py` | slot pool tests: capacity 1 and 4 bounded exactly, shrinking under load kills nothing, growing wakes waiters, memory overrun dies clean | real |
 | `tests/test_engines_parallel.py` | warm worker per game, parallel parts, merges (function of the parts, not of arrival order), a failing part, idle watchdog, determinism against the old sequential code | real |
 | `tests/test_solve.py` | prep pre-solving: roots near the sample position are stored, served from the cache, tied to the simulator hash, both seats, no prose in the file | real |
+| `tests/test_libs.py` | the engine subsystem: the network guard (allowlist, GET only, no game content in a query), discovery filters (hallucinated name, no wheel, too big, too new, LLM client), install (pip failure, timeout, no key to pip, bundle reuse), docs (introspection, prompt injection in a README, BM25), the adapter static check, the trust levels, and the runtime in a real sandbox child with a hand-written adapter (crash, hang, memory, illegal action, warm child, stdout stays byte-exact) | real |
+| `tests/env_probe_job.py` | a sandbox job that reports the child's environment (one-thread BLAS limits, no secrets) | real |
 | `testgames/nim_deal.py` | our own test game for arena-lite: Think ahead, Nim whose dealt heaps are written into the rules text, so the rules of `prep` and `start` differ (kit note K2); the check that prep work is reused for a new deal | real |
 | `testgames/rps_twist.py` | our own test game for arena-lite (`arena.core.Game` subclass): Read the opponent, simultaneous moves, payoff twist. New test games go here, in the same form | real |
 
@@ -239,12 +246,26 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/prep/mastery_job.py` | standalone sandbox job that stress-tests verified simulators with generic random and greedy policies | real |
 | `bot/prep/solve.py` | prep pass that solves the roots near the sample position with the match's own alpha-beta (as many children as the resource plan allows) and stores them in `solved.json` through the engine's cache format; best effort, off with `BOT_RESOURCES=off` | real |
 | `bot/prep/solve_job.py` | the solving as a sandbox job: breadth-first positions where it is our move, alpha-beta per root with a generous budget, roots solved with exact values for every move are returned | real |
+| `bot/libs/__init__.py` | the ENGINE SUBSYSTEM: discover -> install -> learn -> generate -> validate -> use. `prepare_all` runs one stage after the other inside prep's window (called by `prep/pipeline.run_libs`), writes `report.json` per variant and never raises. Imports nothing at package import time: the bot process only loads it when it is used. `BOT_ENGINE_SUBSYSTEM=off` and the harness is exactly what it was before | real |
+| `bot/libs/capabilities.py` | the closed capability vocabulary (10 tags) and the mapping profile -> tags; also the FIXED query phrases, so no game content can reach the network | real |
+| `bot/libs/net.py` | the only network door (rulebook 7.9/7.11): GET only, host allowlist, redirects re-checked, byte and call caps, queries only from the capability vocabulary, the arena proxy used as it is, nothing on stdout | real |
+| `bot/libs/catalog.json` | DATA: the curated library per capability tag (name, import, why, size cap, our rank, docs URL, baked or not) plus the deny list of hosted-model clients. A new game needs a row here at most, never a branch in the harness | real |
+| `bot/libs/discover.py` | candidates = catalog rows + names the model proposes; every name verified on the PyPI JSON API: wheel for this interpreter, not yanked, size cap, settled release (it falls back to an older version), requires_python, maturity for names we did not curate, never an LLM client | real |
+| `bot/libs/install.py` | wheels only, wheelhouse before the network, `fcntl.flock` on /memory, private temporary directory published with one atomic rename, bundles reused across containers, import probe in a subprocess, pip output to stderr | real |
+| `bot/libs/docs.py` | learning the API: local introspection of the installed package in a subprocess first (authoritative, no network), then the registry description or the README; BM25-ranked chunks, cached in `/memory/_docs`; `sanitize()` strips prompt injections out of untrusted documentation | real |
+| `bot/libs/adapter_gen.py` | Haiku writes `adapter.py` (Adapter.setup/parse/suggest/update); own `ast` static check (only the chosen libraries plus a fixed stdlib list, nothing at import time, no dangerous builtins), up to 4 rounds with the failures fed back | real |
+| `bot/libs/prompts/` | the adapter contract A1-A12, the system and user prompt and the repair prompt | real |
+| `bot/libs/adapter_job.py` | the only place where a generated adapter and an installed library run: a sandbox child with `sys.path` built here (site-packages plus the bundle). Modes: `suggest` (the real turn) and `validate` (the TrustReport measurements, including a cross-check against an exact alpha-beta search of our own simulator) | real |
+| `bot/libs/validate.py` | judges those measurements into trust A (exact/dominant), B (strong, unverified), C (advisory only) or X (rejected) and stores `trust.json`; also the behaviour check that feeds failures back into the repair loop | real |
+| `bot/libs/requirements-core.txt` | the libraries baked INTO the image (installed) | real |
+| `bot/libs/requirements-extra.txt` | the libraries only downloaded to `/opt/wheelhouse`, installable offline when a game needs one | real |
 | `bot/prep/verify_job.py` | the verification suite as a sandbox job (runs inside the child, standalone, never imported by the bot): load, sample parse, legal actions, contract behavior (no mutation, same result twice, JSON round trip), seeded random self-play with playouts per second, seed check (contract C11), stored real turns, traces for the differential test; mode `turn` for one turn | real |
 | `bot/prep/sandbox_child.py` | the program inside the child (`python -I -S`, standalone, never imported by the bot): limits itself (memory, CPU, files), hides stdout and stdin from generated code, serves load / call / job requests as JSON lines | real |
 | `bot/specialist.py` | per-variant registry: process -> memory -> same variant label (`lookup_by_label`) -> cold prep; `build_variant` (extension point); `check_simulator` settles the simulator claim of every spec loaded from memory or by label (verify.is_done, no child, once per spec); `for_start` also records our seat on the spec (`spec.seat`) for the engines | real |
 | `bot/engines/__init__.py` | package marker | real |
 | `bot/engines/bg_compute.py` | one-child, low-priority local compute between requests; instant pause/kill on live work and bounded atomic policy checkpoints; waits while the sandbox has no free slot | real |
 | `bot/engines/base.py` | `BaseEngine`, `NotAvailable`, registry family -> engine; `SimEngine`, the helper of every engine that runs on a verified simulator: switch `BOT_L3`, simulator file check, configurable per-family time slice (`BOT_SLICE_FRACTION` overrides), one WARM sandbox child per game and part (killed at `end`, when idle, or after one move clock unused; fresh child per turn with `BOT_WARM_WORKER=off`), parallel parts merged in part order and cancelled by a decisive part (`BOT_SEARCH_WORKERS`), live check result, "off for this game", per-variant live counters (`live.json`), `Candidate` building; `MixedEngine` (read_opponent, bluff): the seeded draw of one action from a mixed strategy and the candidates around it | real |
+| `bot/engines/library.py` | runtime of the engine subsystem: runs the adapter in a sandbox child inside the move slice, one warm child per game, and turns the trust level into what the ladder may do with the rows (A/B candidates, C evidence in the prompt, X nothing); demotes the stored trust after a run-time failure or three lost games | real |
 | `bot/engines/search.py` | Think ahead, parent side: payload, cache of solved roots in `<variant_dir>/solved.json`, candidates (exact values when solved) | real |
 | `bot/engines/search_job.py` | Think ahead search as a sandbox job: validated integer-bitboard gravity search, exact immediate wins, mandatory blocks, anti-feed filtering, forcing double-threat priority, bounded threat evaluation, and terminal endgame solving up to 24 inferred empty cells; MCTS remains for chance and hidden-value modules | real |
 | `bot/engines/sim_common.py` | helpers the engine jobs load by path (seat resolution and live check, canonical state text, hidden paths, world sampling by seeds, worlds written back into a state, view of a state without hidden parts, `Clock`) | real |
@@ -278,6 +299,12 @@ during the event; falls back to a temp folder when not writable):
 <memory>/opponents/<team_id>.json                 opponent profiles
 <memory>/metrics/<container_id>.jsonl             one line per answer / game end
 <memory>/<game_id>/<rules_hash>/strategy.json     aggregate prep self-play findings and safety checks
+<memory>/<game_id>/<rules_hash>/adapter.py      engine subsystem: the generated library adapter
+<memory>/<game_id>/<rules_hash>/trust.json      its trust level A/B/C/X with the measurements behind it
+<memory>/<game_id>/<rules_hash>/report.json     what was considered, installed, read and measured (for the demo)
+<memory>/_venvs/<bundle>/                       installed library bundles, shared by all our containers
+<memory>/_docs/<name==version>/                 cached API and documentation text
+<memory>/_pipcache/                             pip's download cache
 <memory>/<game_id>/<rules_hash>/background.json    bounded local idle-compute policy hints
 ```
 

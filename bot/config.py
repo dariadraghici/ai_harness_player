@@ -66,6 +66,17 @@ def env_flag(name):
     return _env(name).strip().lower() in ("1", "true", "yes", "on")
 
 
+# ---------------------------------------------------------------- engine subsystem (bot/libs/)
+# ENGINE_SUBSYSTEM of the brief, named BOT_* because only LLM_* and BOT_* reach the bot in the practice arena.
+# off  -> prep and play behave exactly as they did before the subsystem existed.
+ENGINE_SUBSYSTEM = _env("BOT_ENGINE_SUBSYSTEM", "on").strip().lower() not in ("0", "off", "false", "no", "none")
+# BOT_LIBS_NETWORK=off      no registry and no documentation fetching (baked libraries still work)
+# BOT_LIBS_INSTALL=off      never run pip; use only what the image has
+# BOT_LIBS_ENGINE=off       keep what prep built but never use it at turn time
+# BOT_LIBS_ALLOWLIST        extra host suffixes for bot/libs/net.py, comma separated
+# BOT_ALLOW_GAME_NAME_IN_QUERIES=on   lift the rule that no game name reaches a query (off by default)
+# BOT_WHEELHOUSE            where the baked wheels are (default /opt/wheelhouse)
+
 LOG_LEVEL = _env("BOT_LOG_LEVEL", "info").lower()      # debug, info, warning, error
 FAKE_LLM = env_flag("BOT_FAKE_LLM")                    # 1 = no network, canned answers
 FAKE_LLM_MODE = _env("BOT_FAKE_LLM_MODE", "ok").lower()  # ok, fail, hang

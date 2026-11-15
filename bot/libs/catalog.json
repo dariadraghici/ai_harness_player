@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "note": "Curated, general-purpose libraries per capability tag. `rank` is OUR priority when several serve the same capability (higher first): a focused, exact library before a large toolkit. DATA, not code: a new game needs a new row here at most, never a branch in the harness (rulebook 3.7). 'baked' entries are installed into the image, so they also work with no network. 'why' is printed in report.json for the live demo. Nothing here is specific to one game.",
+  "entries": [
+    {"name": "numpy", "import": "numpy", "baked": true, "rank": 1, "max_mb": 40,
+     "tags": ["dice_expectimax", "matrix_game_lp", "feedback_deduction", "perfect_info_search"],
+     "why": "arrays and vectorised dynamic programming: value iteration, pattern matrices, payoff matrices",
+     "docs": ["https://numpy.org/doc/stable/reference/index.html"]},
+
+    {"name": "scipy", "import": "scipy", "baked": true, "rank": 2, "max_mb": 60, "needs": ["numpy"],
+     "tags": ["matrix_game_lp", "bargaining_auction", "dice_expectimax"],
+     "why": "scipy.optimize.linprog (HiGHS) solves a zero-sum matrix game exactly; minimize for best responses",
+     "docs": ["https://docs.scipy.org/doc/scipy/reference/optimize.html"]},
+
+    {"name": "nashpy", "import": "nashpy", "baked": true, "rank": 2, "max_mb": 5, "needs": ["numpy", "scipy"],
+     "tags": ["matrix_game_lp"],
+     "why": "equilibria of a bimatrix game (support enumeration, Lemke-Howson, fictitious play)",
+     "docs": ["https://nashpy.readthedocs.io/en/stable/reference/index.html"]},
+
+    {"name": "python-sat", "import": "pysat", "baked": true, "rank": 2, "max_mb": 20,
+     "tags": ["feedback_deduction"],
+     "why": "SAT solvers (minisat/glucose) to keep only the hidden states consistent with all feedback so far",
+     "docs": ["https://pysathq.github.io/docs/html/api/solvers.html"]},
+
+    {"name": "rank-bm25", "import": "rank_bm25", "baked": true, "rank": 2, "max_mb": 2, "needs": ["numpy"],
+     "tags": ["document_qa"],
+     "why": "BM25 retrieval over the passages of a document, for answer-from-the-document games",
+     "docs": ["https://raw.githubusercontent.com/dorianbrown/rank_bm25/master/README.md"]},
+
+    {"name": "rapidfuzz", "import": "rapidfuzz", "baked": true, "rank": 1, "max_mb": 15,
+     "tags": ["text_guardrail", "document_qa"],
+     "why": "fast fuzzy matching: catches a forbidden subject written with typos or spacing tricks",
+     "docs": ["https://rapidfuzz.github.io/RapidFuzz/Usage/fuzz.html"]},
+
+    {"name": "Unidecode", "import": "unidecode", "baked": true, "rank": 1, "max_mb": 2,
+     "tags": ["text_guardrail"],
+     "why": "transliterates unicode to ASCII, so a forbidden word cannot hide behind lookalike characters",
+     "docs": ["https://raw.githubusercontent.com/avian2/unidecode/master/README.rst"]},
+
+    {"name": "regex", "import": "regex", "baked": true, "rank": 1, "max_mb": 5,
+     "tags": ["text_guardrail", "feedback_deduction"],
+     "why": "unicode-aware regular expressions with fuzzy matching, stronger than re for outgoing-text filters",
+     "docs": ["https://raw.githubusercontent.com/mrabarnett/mrab-regex/hg/README.rst"]},
+
+    {"name": "chess", "import": "chess", "baked": true, "rank": 0, "max_mb": 10,
+     "tags": ["perfect_info_search", "external_binary_engine"],
+     "why": "legal move generation, FEN/SAN parsing and a UCI driver for chess-like variants (python-chess)",
+     "docs": ["https://python-chess.readthedocs.io/en/latest/core.html"]},
+
+    {"name": "treys", "import": "treys", "baked": true, "rank": 2, "max_mb": 2,
+     "tags": ["imperfect_info_cfr"],
+     "why": "fast 5-7 card poker hand evaluation for equity by Monte Carlo",
+     "docs": ["https://raw.githubusercontent.com/ihendley/treys/master/README.md"]},
+
+    {"name": "pokerkit", "import": "pokerkit", "baked": false, "rank": 1, "max_mb": 10,
+     "tags": ["imperfect_info_cfr"],
+     "why": "poker state machine and hand evaluation for many betting variants",
+     "docs": ["https://pokerkit.readthedocs.io/en/stable/simulation.html"]},
+
+    {"name": "z3-solver", "import": "z3", "baked": false, "rank": 1, "max_mb": 80,
+     "tags": ["feedback_deduction", "bargaining_auction"],
+     "why": "SMT solver: arithmetic constraints over hidden numbers, not just boolean ones",
+     "docs": ["https://raw.githubusercontent.com/Z3Prover/z3/master/README.md"]},
+
+    {"name": "ortools", "import": "ortools", "baked": false, "rank": 0, "max_mb": 120,
+     "tags": ["feedback_deduction", "bargaining_auction"],
+     "why": "CP-SAT and linear solvers for assignment, allocation and consistency problems",
+     "docs": ["https://raw.githubusercontent.com/google/or-tools/stable/README.md"]},
+
+    {"name": "open-spiel", "import": "pyspiel", "baked": false, "rank": 0, "max_mb": 150,
+     "tags": ["perfect_info_search", "imperfect_info_cfr", "matrix_game_lp"],
+     "why": "reference implementations of CFR, MCTS and exact solvers for many abstract games",
+     "docs": ["https://raw.githubusercontent.com/google-deepmind/open_spiel/master/docs/api_reference.md"]},
+
+    {"name": "axelrod", "import": "axelrod", "baked": false, "rank": 1, "max_mb": 60,
+     "tags": ["simultaneous_exploitation"],
+     "why": "a library of repeated-game strategies and tournaments, for classifying a repeated opponent",
+     "docs": ["https://axelrod.readthedocs.io/en/stable/index.html"]},
+
+    {"name": "wordfreq", "import": "wordfreq", "baked": false, "rank": 1, "max_mb": 60,
+     "tags": ["feedback_deduction"],
+     "why": "word frequency priors, so a word-guessing game starts from likely words",
+     "docs": ["https://raw.githubusercontent.com/rspeer/wordfreq/master/README.md"]},
+
+    {"name": "networkx", "import": "networkx", "baked": false, "rank": 0, "max_mb": 20,
+     "tags": ["perfect_info_search", "bargaining_auction"],
+     "why": "graph algorithms (matching, flows, shortest paths) for board and allocation structures",
+     "docs": ["https://networkx.org/documentation/stable/reference/algorithms/index.html"]}
+  ],
+  "deny": ["openai", "anthropic", "cohere", "google-generativeai", "google-genai", "mistralai", "litellm",
+           "langchain", "langchain-core", "llama-index", "llama-cpp-python", "transformers", "sentence-transformers",
+           "fastembed", "huggingface-hub", "replicate", "together", "groq", "ollama", "vllm", "guidance",
+           "instructor", "dspy-ai", "autogen", "crewai", "haystack-ai", "openrouter"]
+}

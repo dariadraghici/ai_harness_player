@@ -42,6 +42,10 @@ PHASE_B_END_FRACTION = 0.53      # generation ends here (509 s -> 270 s = 45% of
 VERIFY_END_FRACTION = 0.85       # verification and its repair rounds end here (509 s -> 433 s)
 PHASE_B_MIN_S = 60.0             # generation starts only with this much time before its end
 PHASE_B_UNKNOWN_MIN_S = 150.0    # family unknown gets candidates only with this much time
+# The engine subsystem (bot/libs/) runs after the simulators and before mastery, which is the elastic stage:
+# it may take this share of what is left, capped, and mastery keeps the rest.
+LIBS_SHARE = 0.6
+LIBS_MAX_S = 260.0
 
 
 def run_prep(msg, deadline):
@@ -72,9 +76,25 @@ def _run_prep(msg, deadline):
     if solved:
         log.info("prep %s: pre-solved roots in %.1fs: %s" % (game_id, time.monotonic() - t_s, {
             h[:8]: (v.get("solved"), v.get("tried")) for h, v in solved.items()}))
+    run_libs(done, analyses, deadline)
     mastery.refine(done, analyses, deadline)
     log.info("prep %s: strategy mastery persisted in %.1fs" % (game_id, time.monotonic() - t_a))
     return done
+
+
+def run_libs(specs, analyses, deadline):
+    """The engine subsystem: find, install and learn an open-source library, write an adapter for it and
+    measure how far it can be trusted (bot/libs/). Best effort, inside its own window. Never raises."""
+    try:
+        from .. import libs
+        t = time.monotonic()
+        end = deadline - mastery.SAFETY_MARGIN_S
+        window = min(LIBS_MAX_S, max(0.0, (end - t) * LIBS_SHARE))
+        levels = libs.prepare_all(specs, analyses, end, window)
+        if levels:
+            log.info("prep: library engines in %.0fs: %s" % (time.monotonic() - t, levels))
+    except Exception:
+        log.exception("prep: the engine subsystem failed")
 
 
 def mark_chat_is_move(specs):

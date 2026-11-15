@@ -189,7 +189,8 @@ def render_objective(goal, ledger=None):
                 LEDGER=said, TARGET=target)
 
 
-def build_decide_messages(spec, start_msg, turn_msg, ctx, candidates, legal, goal=None, ledger=None):
+def build_decide_messages(spec, start_msg, turn_msg, ctx, candidates, legal, goal=None, ledger=None,
+                          advice=""):
     """The messages of the decision call. Public so tests and the demo can show the prompt."""
     start_msg = start_msg or {}
     score = turn_msg.get("match_score") or start_msg.get("match_score") or {}
@@ -246,6 +247,8 @@ def build_decide_messages(spec, start_msg, turn_msg, ctx, candidates, legal, goa
             parts.append("ACTION FORMAT: " + prof.action_format)
         if prof and prof.example_action:
             parts.append("EXAMPLE ACTION (format only, not necessarily good now): " + prof.example_action)
+    if advice:
+        parts.append(str(advice)[:1200])
     if candidates:
         parts.append("ENGINE CANDIDATES (best first; choose one of these): " + json.dumps(
             [{"action": c.action, "value": round(c.value, 3), "note": c.note} for c in candidates],
@@ -282,7 +285,7 @@ def build_decide_messages(spec, start_msg, turn_msg, ctx, candidates, legal, goa
             {"role": "user", "content": "\n\n".join(parts)}]
 
 
-def decide(spec, start_msg, turn_msg, ctx, candidates, legal, timeout):
+def decide(spec, start_msg, turn_msg, ctx, candidates, legal, timeout, advice=""):
     """One model call. Returns {"action", "chat", "why"} (raw, unvalidated) or None."""
     profile = spec.profile if spec else None
     family = profile.family if profile else "unknown"
@@ -311,7 +314,8 @@ def decide(spec, start_msg, turn_msg, ctx, candidates, legal, timeout):
         ledger = influence.state_for(start_msg or {}).ledger
     except Exception:
         log.exception("influence planning failed, no objective this turn")
-    msgs = build_decide_messages(spec, start_msg, turn_msg, ctx, policy_candidates, legal, goal, ledger)
+    msgs = build_decide_messages(spec, start_msg, turn_msg, ctx, policy_candidates, legal, goal, ledger,
+                                 advice)
     text = llm.complete(msgs, max_tokens=config.DECIDE_MAX_TOKENS, timeout=timeout, tag="decide")
     obj = parse_json_object(text)
     if not obj:

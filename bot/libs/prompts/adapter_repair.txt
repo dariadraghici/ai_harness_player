@@ -1,0 +1,13 @@
+TASK: adapter-repair
+
+The module you wrote failed our checks. Fix exactly these failures and change nothing else.
+
+FAILURES:
+{{FAILURES}}
+
+THE MODULE AS IT IS NOW:
+```python
+{{CODE}}
+```
+
+Answer with the whole corrected module in ONE fenced Python block, nothing else. Keep the contract (A1 to A12).

@@ -196,6 +196,11 @@ def run():
             sm = self.start_msg or {}
             opponents.record_game_end(sm.get("opponent"), msg, sm.get("game_id"))
             influence.on_game_end(sm, defense.build_context(msg.get("chat")))
+            try:
+                from .engines import library as engines_library
+                engines_library.record_result(self.spec, msg.get("result") == "win")
+            except Exception:
+                log.exception("library result not recorded")
             metrics.record("end", game_id=sm.get("game_id"), game_index=msg.get("game_index"),
                            result=msg.get("result"), reason=msg.get("reason"),
                            match_over=msg.get("match_over"), llm=llm.usage())
