@@ -48,10 +48,21 @@ PLAYERS = ("code", "engine", "random", "first")
 
 
 def silence_model():
-    """Every model call returns nothing, so the move can only come from our own code."""
+    """Every model call returns nothing, so the move can only come from our own code.
+
+    Returns the function that was replaced, so a caller that lives longer than one run (a test) can put it
+    back: bot.llm is a module shared by the whole process.
+    """
     from bot import llm
+    real = llm.complete
     llm.complete = lambda *a, **kw: None
-    return llm
+    return real
+
+
+def restore_model(real):
+    from bot import llm
+    if real is not None:
+        llm.complete = real
 
 
 def arena_lite():
@@ -175,7 +186,14 @@ def play(game_cls, variant, players, index, seconds, specs, rng, step_cap=400):
 
 
 def run(game_id, label, players, n, seconds, seed, swap=True):
-    silence_model()
+    real = silence_model()
+    try:
+        return _run(game_id, label, players, n, seconds, seed, swap)
+    finally:
+        restore_model(real)
+
+
+def _run(game_id, label, players, n, seconds, seed, swap=True):
     game_cls = load_game(game_id)
     variants = {str(v.get("label")): v for v in game_cls.variants()}
     if label and label not in variants:

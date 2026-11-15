@@ -11,9 +11,20 @@ HAVE_KIT = os.path.isfile(os.path.join(EA.REPO, "participant-kit", "arena-lite",
 @unittest.skipUnless(HAVE_KIT, "needs participant-kit/arena-lite")
 class EngineArenaTests(unittest.TestCase):
 
-    def test_the_model_is_silenced_before_anything_is_played(self):
-        llm = EA.silence_model()
+    def setUp(self):
+        from bot import llm
+        self.real = llm.complete
+        self.addCleanup(setattr, llm, "complete", self.real)      # bot.llm is shared by the whole process
+
+    def test_the_model_is_silenced_while_a_run_lasts_and_restored_after(self):
+        from bot import llm
+        real = EA.silence_model()
+        self.assertIs(real, self.real)
         self.assertIsNone(llm.complete([{"role": "user", "content": "hello"}], timeout=5))
+        EA.restore_model(real)
+        self.assertIs(llm.complete, self.real)
+        EA.run("taboo", "", ("random", "first"), 1, 2.0, seed=2)
+        self.assertIs(llm.complete, self.real, "a run must put the model back")
 
     def test_a_game_of_ours_is_found_by_its_id(self):
         cls = EA.load_game("taboo")
