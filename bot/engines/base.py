@@ -54,10 +54,17 @@ from ..interfaces import Candidate, Engine, VariantSpec  # noqa: F401  (re-expor
 SLICE_FRACTION = 0.15            # of the move clock: 3 s of 20
 SLICE_MIN_S = 0.4                # below this the engine does not start
 SLICE_BACKSTOP_S = 1.5           # the parent kills the child this long after the slice
-# Families on by default when BOT_L3 is not set. Decided by measurement (see the hand-over): think_ahead and
+# Families on by default when BOT_L3 is not set. Decided by MEASUREMENT, never by opinion: think_ahead and
 # read_opponent ran in real practice matches on their games (tic_tac_toe, nim_deal, pig; rps_twist), guessing is
-# measured on the real guess_number simulators; bluff has no practice game, so it is off until it has one.
-L3_DEFAULT = "think_ahead,guessing,read_opponent"
+# measured on the real guess_number simulators.
+# bluff was off while no practice game of the family existed. testgames/kuhn_bet.py is that game, prep verified
+# a simulator for both its variants, and the engine then beat the alternative twice over:
+#   arena practice against the random bot, with prep: engine 5 won / 1 drawn / 1 lost over 7 games, the model
+#   deciding instead 1 won / 1 drawn / 4 lost over 6 games (0 warnings either way);
+#   headless (scripts/engine_arena.py, no model at all): engine 23 won / 2 drawn / 15 of 40 games against
+#   random, the whole ladder 11 won / 3 drawn / 6 of 20, every move answered, none illegal, 0.71 s per move.
+# It costs about one second more per answer, which is a tie-break, while losing the game is not.
+L3_DEFAULT = "think_ahead,guessing,read_opponent,bluff"
 L3_ALL = ("think_ahead", "guessing", "read_opponent", "bluff")
 JOB_ERRORS_OFF = 2               # simulator exceptions in jobs before "off for this game"
 WARM_CPU_S = 900                 # CPU backstop of a warm child (it lives for a whole game, not for one slice)

@@ -229,8 +229,10 @@ luckydevs-3:
 
 - [ ] Read the opponent: payoff matrix from the simulator, equilibrium by
       regret matching, opponent frequency model, capped exploitation.
-- [ ] Bluff: sample hidden states consistent with the observations,
-      expected value per action, mixed strategy so we are not readable.
+- [x] Bluff: sample hidden states consistent with the observations, expected
+      value per action, mixed strategy so we are not readable. Measured on
+      `testgames/kuhn_bet.py` and then switched ON by default (see
+      `bot/engines/base.py` L3_DEFAULT for the numbers).
 - [ ] Live consistency check: every turn compare the simulator's legal
       actions with the arena's; on a mismatch drop to L2 for that game.
 - [ ] A reliable fallback action when `legal_actions` is `null` (today: the
@@ -273,8 +275,11 @@ luckydevs-2:
 
 luckydevs-3:
 
-- [ ] Run prep over every rules text we have and table the verification
-      pass rate; fix the generic failures.
+- [x] Run prep over every rules text we have and table the verification pass
+      rate: `scripts/replay_report.py` prints it from /memory, and
+      `scripts/engine_arena.py` measures whether an engine is worth its slice
+      without the arena and without the model. Fresh prep has been run on
+      tic_tac_toe, pig, guess_number, rps_twist, nim_deal and kuhn_bet.
 - [ ] Prep time budget tuning; behavior on a game of an unknown family.
 
 ## Part F: pitfalls

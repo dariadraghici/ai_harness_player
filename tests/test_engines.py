@@ -1040,12 +1040,16 @@ class BluffTests(Base):
         self.assertAlmostEqual(ev["sure"], 0.2, delta=0.001)
         self.assertLess(ev["gamble"], 0.1)
 
-    def test_off_by_default(self):
+    def test_on_by_default_and_off_with_the_switch(self):
+        """bluff joined the default families once testgames/kuhn_bet.py measured it (see base.L3_DEFAULT)."""
         spec = self.spec()
         eng = self.engine(bluff.BluffEngine)
         env = dict(os.environ)
         env.pop("BOT_L3", None)
-        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(sandbox, "run_job") as rj:
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertTrue(base.enabled("bluff"))
+        with mock.patch.dict(os.environ, {"BOT_L3": "think_ahead"}), \
+                mock.patch.object(sandbox, "run_job") as rj:
             self.assertFalse(base.enabled("bluff"))
             self.assertEqual(self.ask(eng, spec, self.turn(bet_obs(2), ["bet", "check"])), [])
             rj.assert_not_called()
