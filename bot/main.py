@@ -106,6 +106,7 @@ def run():
                                level=info.get("level"), why=info.get("why"),
                                elapsed=round(elapsed, 3), watchdog=by_watchdog, source=source,
                                warning=bool(req.msg.get("warning")), llm=llm.usage(),
+                               action=(obj.get("action") if isinstance(obj, dict) else None),
                                **metrics.perf_fields(getattr(req, "perf0", None), getattr(req, "timing", None),
                                                      dict(engines_base.LAST_RUN) if req.type == "turn" else None))
                 if req.type == "turn" and isinstance(obj, dict):

@@ -255,8 +255,11 @@ Milestones:
 
 luckydevs-1:
 
-- [ ] Demo viewer: a static page built from metrics and replays that shows
-      how a specialist was built in prep and why each move was chosen.
+- [x] Demo viewer: `scripts/demo_page.py` builds one self-contained page
+      (no network, no script tag) from the replays, the metrics lines and the
+      prep artifacts: the ladder with our own shares, every prepared variant,
+      one match move by move with the reason and the chat line, and the
+      results per family.
 - [x] Numbers for the slides: `scripts/replay_report.py --notes NOTES.md`
       (verification pass rate, level per decision, cost, answer times,
       results, and the weakest family to fix next).
