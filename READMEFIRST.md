@@ -279,8 +279,19 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/engines/bluff_job.py` | Bluff as a sandbox job: sample the hidden worlds by seeds, expected value per action by playouts against a random opponent and, in a share of the samples, one level smarter (it uses its own hidden card), common random numbers, softmax with a temperature tied to spread and noise | real |
 | `bot/policies/__init__.py` | policy registry and confidence router for specialized and generic policies | real |
 | `bot/policies/allocation.py` | defensive parser and deterministic majority-value troop allocation policy | real |
+| `bot/policies/nim.py` | Sprague-Grundy Nim policy with atomic prep metadata | real |
+| `bot/policies/bulls_cows.py` | duplicate-aware four-digit candidate and entropy solver | real |
+| `bot/policies/pig.py` | bounded value-iteration hold-or-roll policy | real |
+| `bot/policies/battleship.py` | 6x6 fleet-placement density targeting policy | real |
+| `bot/policies/prisoners.py` | forgiving tit-for-tat Prisoner's Dilemma policy | real |
+| `bot/policies/rps.py` | seeded ensemble/frequency Rock Paper Scissors policy | real |
+| `bot/policies/battleship.py` | 6x6 fleet-placement density targeting policy | real |
+| `bot/policies/hex.py` | 7x7 Hex immediate-tactic and path-ordering policy | real |
+| `bot/policies/dots_boxes.py` | safe-line and free-box Dots and Boxes policy | real |
+| `bot/policies/mini_chess.py` | legal-action-authority Mini Chess fallback policy | basic |
 | `bot/policies/generic.py` | grammar-first fallback policy for unknown variants | real |
 | `bot/policies/wordle.py` | registry adapter for the deterministic Wordle policy | real |
+| `tests/test_new_policies.py` | NIM, Bulls and Cows, Pig, and router regression tests | real |
 
 ## Where things are stored at runtime
 

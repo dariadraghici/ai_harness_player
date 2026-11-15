@@ -16,14 +16,14 @@ something legal to send at the hard deadline.
 
 import time
 
-from . import clock, config, log
+from . import clock, config, log, policies
 from .chat import decide as decide_mod
 from .chat import defense, offense
 from .engines import base as engines_base
 from .engines import guardrails
 from .engines import library as engines_library
 from .engines import wordle
-from .interfaces import Decision
+from .interfaces import Candidate, Decision
 
 
 def norm(a):
@@ -183,18 +183,29 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
     timing["l1_s"] = round(t_l3 - t0, 4)
     candidates = []
     try:
-        engine = engines_base.get_engine(family)
-        wordle_move = family == "guessing" and wordle.is_wordle_rules(spec.rules if spec else "")
-        if not wordle_move and (spec is None or not spec.verified or not spec.simulator_path):
-            raise engines_base.NotAvailable("no verified simulator")
-        if engine is None:
-            raise engines_base.NotAvailable("no engine for family %s" % family)
-        try:
-            from .chat import influence as _influence
-            engine.want_replies = _influence.wants_replies(spec, start_msg)     # r_likely / r_target for the chat
-        except Exception:
-            engine.want_replies = False
-        raw = engine.candidates(spec, turn_msg, deadline - 2.0 - config.LLM_RESERVE_S) or []
+        dedicated = policies.specialized(spec.rules if spec else "",
+                                         spec.sample_turn if spec else None)
+        if dedicated:
+            policy = policies.choose(spec.rules, spec.sample_turn)
+            raw = [Candidate(row["action"], float(row.get("score", 0.0)),
+                             "dedicated policy")
+                   for row in policy.decide({"spec": spec, "turn": turn_msg},
+                                            deadline - 1.0)
+                   if isinstance(row, dict) and row.get("action")]
+            engine = None
+        else:
+            engine = engines_base.get_engine(family)
+            wordle_move = family == "guessing" and wordle.is_wordle_rules(spec.rules if spec else "")
+            if not wordle_move and (spec is None or not spec.verified or not spec.simulator_path):
+                raise engines_base.NotAvailable("no verified simulator")
+            if engine is None:
+                raise engines_base.NotAvailable("no engine for family %s" % family)
+            try:
+                from .chat import influence as _influence
+                engine.want_replies = _influence.wants_replies(spec, start_msg)
+            except Exception:
+                engine.want_replies = False
+            raw = engine.candidates(spec, turn_msg, deadline - 2.0 - config.LLM_RESERVE_S) or []
         for c in raw:
             a = match_legal(c.action, usable) if usable else c.action
             if a and (rejected is None or norm(a) != norm(rejected)):
@@ -243,8 +254,9 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
     try:
         left = deadline - time.monotonic()
         timeout = min(clock.llm_match_timeout(turn_msg, move_seconds), left - 1.0)
-        if family == "guessing" and wordle.is_wordle_rules(spec.rules if spec else ""):
-            log.info("Wordle move is code-selected; model is chat-only")
+        if policies.specialized(spec.rules if spec else "",
+                                spec.sample_turn if spec else None):
+            log.info("Dedicated policy move is code-selected; model is chat-only")
         elif (warning and left <= 10.0) or left < 4.0:
             log.warning("L2 skipped: warning/deadline emergency with %.1fs left" % left)
         else:
