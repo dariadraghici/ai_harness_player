@@ -187,6 +187,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `tests/test_check_image.py` | unit tests for pre-push checklist functions and ARENA-CONTRACT 2.9 validation | real |
 | `tests/test_proxy.py` | unit tests for proxy routing: direct gateway calls bypass proxy, general traffic honors HTTPS_PROXY, urllib honors NO_PROXY | real |
 | `tests/test_prompt_cache.py` | the prompt cache: the prefix is marked only when it is worth it, the original messages are never mutated, a read is billed at a tenth and a write at 1.25x, and a gateway that refuses content blocks costs one retry and is never asked again | real |
+| `tests/test_memory_concurrency.py` | /memory with several containers at once, as real subprocesses: no reader ever sees a half-written file, no temporary file is left behind, the shared solved-roots cache may lose an update but never breaks, a variant of another harness version is not loaded, and the install lock is exclusive between processes | real |
 | `tests/test_resources.py` | unit tests of `bot/resources.py` with fake cgroup trees: detection order, clamps, floors, idle zeroing, off switch, failure paths | real |
 | `tests/test_sandbox_capacity.py` | slot pool tests: capacity 1 and 4 bounded exactly, shrinking under load kills nothing, growing wakes waiters, memory overrun dies clean | real |
 | `tests/test_engines_parallel.py` | warm worker per game, parallel parts, merges (function of the parts, not of arrival order), a failing part, idle watchdog, determinism against the old sequential code | real |

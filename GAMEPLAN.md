@@ -210,7 +210,10 @@ luckydevs-1:
 - [x] Cost and speed report: `scripts/replay_report.py` (tokens, cache hits,
       answer times, model spend per game, peak RSS and children per turn) and
       `scripts/batch_runner.py` (the same per match, against a baseline).
-- [ ] Memory under concurrency: many writers, cache versioning, reload.
+- [x] Memory under concurrency: `tests/test_memory_concurrency.py` starts real
+      subprocesses against one /memory and checks atomic writes, the shared
+      read-modify-write cache, harness-version cache invalidation and the
+      install lock.
 
 luckydevs-2:
 
