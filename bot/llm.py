@@ -114,6 +114,47 @@ def pop_last_call():
         return res
 
 
+# ------------------------------------------------------------------ prompt cache
+# The system message of a decision (rules, playbook, tactics) is identical for every turn of a game, so the
+# gateway can keep it in its prompt cache: a cache read costs 0.01 USD per million tokens instead of 0.10
+# (ARENA-CONTRACT 2.6), and model cost is a scored tie-break. The gateway only caches a block that asks for it,
+# so a plain string prompt is never cached - measured against the real gateway: two identical plain calls
+# reported cached_tokens 0, the same calls with the block below reported a write and then a read of 4842 tokens.
+# If a gateway ever refuses content blocks, the first failure switches this off for the process and the call is
+# retried as plain text, so the worst case is one retry and never a lost turn.
+_blocks_ok = [True]
+
+
+def cache_enabled():
+    return (os.environ.get("BOT_PROMPT_CACHE", "on").strip().lower() not in ("0", "off", "false", "no")
+            and _blocks_ok[0])
+
+
+def cache_prefix(messages):
+    """The same messages with the system prefix marked for the prompt cache, or them unchanged.
+
+    Only the LAST system message is marked (our prompts have exactly one) and only when it is long enough to
+    be worth an entry. Never mutates the caller's list.
+    """
+    try:
+        if not cache_enabled():
+            return messages, False
+        index = None
+        for i, m in enumerate(messages or ()):
+            if isinstance(m, dict) and m.get("role") == "system" and isinstance(m.get("content"), str):
+                index = i
+        if index is None or len(messages[index]["content"]) < config.PROMPT_CACHE_MIN_CHARS:
+            return messages, False
+        out = list(messages)
+        out[index] = {"role": "system",
+                      "content": [{"type": "text", "text": messages[index]["content"],
+                                   "cache_control": {"type": "ephemeral"}}]}
+        return out, True
+    except Exception:
+        log.exception("llm: prompt cache marking failed")
+        return messages, False
+
+
 def _account(kid, u, failed=False, tag=""):
     with _lock:
         c = _usage.setdefault(kid, {"calls": 0, "failures": 0, "input": 0,
@@ -123,22 +164,27 @@ def _account(kid, u, failed=False, tag=""):
             c["failures"] += 1
         prompt = int(u.get("prompt_tokens") or 0) if u else 0
         out = int(u.get("completion_tokens") or 0) if u else 0
-        cached = int(u.get("cache_read_input_tokens") or
-                     (u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0) if u else 0
+        details = (u.get("prompt_tokens_details") or {}) if u else {}
+        cached = int(u.get("cache_read_input_tokens") or details.get("cached_tokens") or 0) if u else 0
+        written = int(u.get("cache_creation_input_tokens") or details.get("cache_creation_tokens")
+                      or details.get("cache_write_tokens") or 0) if u else 0
         total = prompt + out
-        cost = (max(prompt - cached, 0) * config.PRICE_INPUT_PER_TOKEN
+        cost = (max(prompt - cached - written, 0) * config.PRICE_INPUT_PER_TOKEN
                 + cached * config.PRICE_CACHE_READ_PER_TOKEN
+                + written * config.PRICE_CACHE_WRITE_PER_TOKEN
                 + out * config.PRICE_OUTPUT_PER_TOKEN)
         if u:
             c["input"] += prompt
             c["output"] += out
             c["cached"] += cached
+            c["written"] = c.get("written", 0) + written
             c["cost"] += cost
 
         _last_call["prompt_tokens"] = prompt
         _last_call["completion_tokens"] = out
         _last_call["total_tokens"] = total
         _last_call["cached_tokens"] = cached
+        _last_call["cache_write_tokens"] = written
         _last_call["cost"] = cost
         _last_call["tag"] = str(tag or "")
         _last_call["failed"] = bool(failed)
@@ -182,15 +228,14 @@ def _complete(messages, max_tokens, timeout, thinking_budget, tag):
     if not key["api_key"]:
         log.warning("llm %s skipped: no api key" % tag)
         return None
-    body = {"model": key["model"], "messages": messages, "max_tokens": int(max_tokens),
-            "thinking": thinking}
+    sent, cached_prefix = cache_prefix(messages)
     box = {}
 
-    def worker():
+    def worker(payload):
         try:
             req = urllib.request.Request(
                 key["base_url"].rstrip("/") + "/chat/completions",
-                data=json.dumps(body).encode("utf-8"),
+                data=json.dumps(payload).encode("utf-8"),
                 headers={"Authorization": "Bearer " + key["api_key"],
                          "Content-Type": "application/json"})
             with _gateway_opener.open(req, timeout=timeout) as r:
@@ -201,15 +246,32 @@ def _complete(messages, max_tokens, timeout, thinking_budget, tag):
             except Exception:
                 detail = ""
             box["error"] = "HTTP %s %s" % (e.code, detail)
+            box["status"] = e.code
         except Exception as e:
             box["error"] = "%s: %s" % (type(e).__name__, e)
 
+    def attempt(payload, budget):
+        box.clear()
+        th = threading.Thread(target=worker, args=(payload,), name="llm-" + tag, daemon=True)
+        th.start()
+        th.join(budget)
+        return th.is_alive()
+
     t0 = time.monotonic()
-    th = threading.Thread(target=worker, name="llm-" + tag, daemon=True)
-    th.start()
-    th.join(timeout)
+    body = {"model": key["model"], "messages": sent, "max_tokens": int(max_tokens), "thinking": thinking}
+    alive = attempt(body, timeout)
+    if not alive and cached_prefix and box.get("status") in (400, 404, 415, 422, 500) :
+        # this gateway does not want content blocks: never mark a prefix again and send it as plain text
+        _blocks_ok[0] = False
+        log.warning("llm %s: the gateway refused a cached prefix (%s), falling back to plain text" % (
+            tag, box.get("status")))
+        left = timeout - (time.monotonic() - t0)
+        if left > 1.5:
+            body = {"model": key["model"], "messages": messages, "max_tokens": int(max_tokens),
+                    "thinking": thinking}
+            alive = attempt(body, left)
     dt = time.monotonic() - t0
-    if th.is_alive():
+    if alive:
         log.warning("llm %s timed out after %.1fs" % (tag, dt))
         _account(kid, None, failed=True, tag=tag)
         return None
@@ -229,8 +291,8 @@ def _complete(messages, max_tokens, timeout, thinking_budget, tag):
     except Exception:
         finish = "?"
     _account(kid, u, failed=not text, tag=tag)
-    log.info("llm %s %.1fs in=%s out=%s finish=%s" % (
-        tag, dt, u.get("prompt_tokens"), u.get("completion_tokens"), finish))
+    log.info("llm %s %.1fs in=%s out=%s cached=%s finish=%s" % (
+        tag, dt, u.get("prompt_tokens"), u.get("completion_tokens"), _last_call.get("cached_tokens"), finish))
     if not text or not str(text).strip():
         log.warning("llm %s returned empty content (finish=%s)" % (tag, finish))
         return None

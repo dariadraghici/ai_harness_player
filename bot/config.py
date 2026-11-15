@@ -38,6 +38,12 @@ GATEWAY_MODEL = "haiku"                                       # the ONLY model
 PRICE_INPUT_PER_TOKEN = 0.10 / 1e6
 PRICE_OUTPUT_PER_TOKEN = 0.50 / 1e6
 PRICE_CACHE_READ_PER_TOKEN = 0.01 / 1e6
+# Writing the cache costs more than a plain input token (Anthropic bills a 5 minute write at 1.25x), so one
+# write pays for itself from the second call with the same prefix on.
+PRICE_CACHE_WRITE_PER_TOKEN = 1.25 * PRICE_INPUT_PER_TOKEN
+# The stable prefix of a prompt (the system message: rules, playbook, tactics) is marked for the gateway's
+# prompt cache when it is at least this many characters. Below that the gateway does not create an entry.
+PROMPT_CACHE_MIN_CHARS = 2000
 
 DECIDE_MAX_TOKENS = 400
 OPENING_MAX_TOKENS = 120

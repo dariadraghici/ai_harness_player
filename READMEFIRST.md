@@ -158,7 +158,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `bot/action_guard.py` | final turn-action choke point: cached grammar validation, warning blacklist, canonical legal-action emission | real |
 | `bot/clock.py` | hard and soft deadlines derived from the message clocks (same proportions as `config.py`) | real |
 | `bot/log.py` | logging to stderr (`BOT_LOG_LEVEL`: debug, info, warning, error) | real |
-| `bot/llm.py` | gateway client (stdlib urllib): `set_key`, `complete` (thinking control, hard timeout, never raises), usage and cost per key, fake mode | real |
+| `bot/llm.py` | gateway client (stdlib urllib): `set_key`, `complete` (thinking control, hard timeout, never raises), the PROMPT CACHE of the stable system prefix (a cache read costs a tenth of a fresh prompt; one refusal switches it off for the process and retries as plain text), usage and cost per key including cache reads and writes, fake mode | real |
 | `bot/memory.py` | `/memory` store: root with fallback, rules hash, atomic writes, variant save/load with harness version check, `find_variant_by_label`, paths | real |
 | `bot/metrics.py` | one JSON line per decision (game, level, time, tokens, cost, why) to `<memory>/metrics/<container>.jsonl` | real |
 | `bot/resources.py` | one source of truth for CPU and memory: measured limits (affinity, cgroup v2/v1, /proc; paths injectable for tests), the three phases (prep, turn, idle), `plan(kind)` (children, child memory, threads, table sizes, search workers, cache size, warm worker), the `BOT_*` knobs and the `BOT_RESOURCES=off` switch that returns exactly the old constants; `enter`/`scoped` apply a phase to the sandbox and the engines | real |
@@ -186,6 +186,7 @@ Status: `real` = finished base behavior, `basic` = works but simple,
 | `tests/test_metrics.py` | unit tests for extended metrics logging: per-call tokens, cost calculation, decision recording | real |
 | `tests/test_check_image.py` | unit tests for pre-push checklist functions and ARENA-CONTRACT 2.9 validation | real |
 | `tests/test_proxy.py` | unit tests for proxy routing: direct gateway calls bypass proxy, general traffic honors HTTPS_PROXY, urllib honors NO_PROXY | real |
+| `tests/test_prompt_cache.py` | the prompt cache: the prefix is marked only when it is worth it, the original messages are never mutated, a read is billed at a tenth and a write at 1.25x, and a gateway that refuses content blocks costs one retry and is never asked again | real |
 | `tests/test_resources.py` | unit tests of `bot/resources.py` with fake cgroup trees: detection order, clamps, floors, idle zeroing, off switch, failure paths | real |
 | `tests/test_sandbox_capacity.py` | slot pool tests: capacity 1 and 4 bounded exactly, shrinking under load kills nothing, growing wakes waiters, memory overrun dies clean | real |
 | `tests/test_engines_parallel.py` | warm worker per game, parallel parts, merges (function of the parts, not of arrival order), a failing part, idle watchdog, determinism against the old sequential code | real |
