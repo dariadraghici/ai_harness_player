@@ -1,9 +1,11 @@
-# LuckyDevs - AI Harness Arena bot
+# LuckyDevs: AI Harness Arena bot
 
 Team **LuckyDevs** · EESTEC Olympics 14 · AI Harness Arena (challenge by dvloper.io)
+
 Team members: Drăghici Daria-Ioana, Ioniță Sebastian, Popescu George Vlad
 
 Image: `harbor.hackaton-2026.dvloper.io/luckydevs/bot` · tags `t1`, `t2`, `t3`
+
 Source: this repository (read access given to the judges' accounts, rule 3.7).
 
 ---
@@ -52,23 +54,23 @@ arena -> stdin (JSON lines) -> protocol loop -> specialist for the game
 
 Main components (paths as in this repository):
 
-- **`bot/action_guard.py`** - the only place that writes an action line. Every action
+- **`bot/action_guard.py`**: the only place that writes an action line. Every action
   is validated against the action grammar of the drawn variant. When `legal_actions`
   is present it is the authority and we send the exact string from the list. After a
   warning the rejected string is blacklisted and never resent.
-- **Decision ladder** (`bot/engines/`, `bot/ladder.py`) - L1 is a guaranteed-valid
+- **Decision ladder** (`bot/engines/`, `bot/ladder.py`): L1 is a guaranteed-valid
   fallback computed before anything heavy; higher levels (search, playouts, solvers)
   can only improve on it, never replace it with something unvalidated.
-- **Sandbox worker** - heavy computation (simulators, search) runs in an isolated
+- **Sandbox worker**: heavy computation (simulators, search) runs in an isolated
   process with time and memory limits so a bug cannot crash the protocol loop.
-- **Chat module** - move and chat come from the same decision. The opponent's chat is
+- **Chat module**: move and chat come from the same decision. The opponent's chat is
   passed to the decision logic as marked, untrusted data and is never obeyed. Own
   private information is never put in chat. Speech rules from the rules text are
   enforced on every line, including the one sent with `ready`.
-- **Memory** (`/memory/<game_id>/<rules_hash>/`) - tables, parsers, opponent notes;
+- **Memory** (`/memory/<game_id>/<rules_hash>/`): tables, parsers, opponent notes;
   written atomically (temp file + `os.replace`), and a missing or corrupt file never
   crashes the bot.
-- **Tooling** (`scripts/`) - `build.py` (labels the image with the git commit),
+- **Tooling** (`scripts/`): `build.py` (labels the image with the git commit),
   `check_image.py` (ARENA-CONTRACT checklist, 13 checks), `push.py` (refuses to push a
   dirty tree or an image not built from HEAD).
 
@@ -76,7 +78,7 @@ Main components (paths as in this repository):
 
 ## 3. What we did, in order
 
-### T1 - first analysis of failures
+### T1: first analysis of failures
 Practice and T1 replays against `dvloper Master` showed three failure classes:
 
 1. **Tactical blunders in Connect-N** (dropping a disc that lets the opponent win on
@@ -100,14 +102,14 @@ Practice and T1 replays against `dvloper Master` showed three failure classes:
 - A chat influence layer (teammate contribution) for non-chat-related games.
 - Image verification (`check_image.py`, 13/13) before every push.
 
-### T2 + round robin - what went wrong
+### T2 + round robin: what went wrong
 The `t2` image finished near the bottom. The replays gave us the key lesson
 (see [Lessons learned](#4-lessons-learned)): in Battleship, variant
 **8x8, 4 ships, salvo** (one shot per ship afloat, e.g. `fire e1 f1 g1 h1`), our
 policy was written for the 6x6 single-shot base variant, sent one shot, got a warning,
 repeated the mistake and forfeited.
 
-### After T2 - three parallel efforts
+### After T2: three parallel efforts
 1. **Local tester with GUI** (`participant-kit-lab/`, built on `arena-lite`): runs two
    Docker images (frozen `t2` vs candidate `t3`) head to head, both seats, many seeds,
    reports W/D/L, warnings, timeouts, per-match winner. Also contains our own
@@ -116,7 +118,7 @@ repeated the mistake and forfeited.
    Bulls and Cows (information-gain guessing), Pig (value iteration), Battleship
    (probability density), RPS (predictor ensemble), Prisoner's Dilemma (opponent model),
    partial Hex / Dots and Boxes / Mini Chess.
-3. **Rules-driven redesign** (`daria/rules-driven-only`) - see next section.
+3. **Rules-driven redesign** (`daria/rules-driven-only`): see next section.
 
 ---
 
@@ -214,4 +216,3 @@ Local head-to-head tester: `participant-kit-lab/arena-lite` -> `python3 -m lab`
   cannot make a weak one strong.
 - Bluff, negotiation, truth and guardrails games have no dedicated engine; they rely on
   the grammar-validated LLM path plus opponent modeling.
-- [add any known weak spots after the final tests]
