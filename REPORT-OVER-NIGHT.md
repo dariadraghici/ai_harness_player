@@ -154,8 +154,8 @@ engine), `bot/resources.py` (close adapter children when idle), `Dockerfile`, `t
 ## 10. What I did not do
 
 - **No Docker build** (see item 1). Nothing else is unverified.
-- **No prep sweep over every game.** Fresh prep has been run on tic_tac_toe, pig, guess_number, rps_twist,
-  nim_deal and kuhn_bet; doc_quiz, taboo and split_deal have only been played from a cold start.
+- ~~**No prep sweep over every game.**~~ Done after all: doc_quiz, taboo and split_deal have real prep now
+  too (section 15), and it turned out to be the most valuable measurement of the night.
 - **The subsystem's exact cross-check only works where our own simulator can prove a position** (sequential,
   perfect information). For guessing and bluff variants the ceiling is trust B. A guessing-specific cross-check
   (against our own guess engine) would raise it; I left it out rather than guess at it.
@@ -297,3 +297,60 @@ I also compared the two players that can own `rps_twist`, since the real games a
 engine 0.729 and 0.800; against `shifty` the policy 0.550 twice and the engine 0.700 and 0.550. At thirty
 games those differences are inside the noise, so I left the policy owning the game rather than change it on a
 coin flip.
+
+## 15. The three families that had no code-level play at all
+
+The last gap in my GAMEPLAN line was "no prep sweep over every game": `doc_quiz`, `taboo` and `split_deal`
+had only ever been played from a cold start. Running real prep on them was supposed to be bookkeeping. It was
+not.
+
+**First, those three families could not reach L3 at all, and not for want of an engine.** `bot/ladder.py`
+asked for a verified simulator before it asked for a move - for every engine - and prep builds a simulator
+only for a family it can simulate. A game of words is not one, so after a full prep:
+
+| family       | variants | verified simulators |
+| ------------ | -------- | ------------------- |
+| `deals`      | 2        | 0                   |
+| `guardrails` | 2        | 0                   |
+| `truth`      | 2        | 0                   |
+
+while the `deals` and `truth` engines need no simulator at all - they decide from the rules text and the turn.
+They had therefore never run a single turn in a tournament. `base.needs_simulator()` now answers the question
+and the ladder asks only the engines that need one (`fe5173e`).
+
+**Then, measured the moment they could run, those two engines turned out to produce nothing on our games:**
+the deals engine returns 0 candidates on all 53 turns of `split_deal`, and the truth engine answers
+`"unknown"` on all 60 turns of `doc_quiz` - a free-text game, so it has no enumerated answers to find a
+supporting quote among, and the game rejects `"unknown"`. So both stay OFF, and `BOT_L3=all` deliberately
+does not turn them on. For whoever owns `bot/engines/truth.py`: the truth engine needs an enumerated answer
+set, and the arena's truth games may well be free-text like ours.
+
+**And then the real result.** Those same three games, prepped, each got a trust-B library adapter from the
+engine subsystem - which needs no simulator either:
+
+| game         | family       | library     | trust |
+| ------------ | ------------ | ----------- | ----- |
+| `doc_quiz`   | `truth`      | `rank-bm25` | B     |
+| `taboo`      | `guardrails` | `Unidecode` | B     |
+| `split_deal` | `deals`      | `scipy`     | B     |
+
+A document-retrieval library for a document quiz, found and installed and wrapped by prep on its own. With
+the model silenced, so that the score is our CODE alone, 20 games against random, two seeds:
+
+| game         | subsystem off | subsystem on  |
+| ------------ | ------------- | ------------- |
+| `doc_quiz`   | 0.050, 0.075  | 0.875, 0.900  |
+| `taboo`      | 0.350, 0.300  | 1.000, 1.000  |
+| `split_deal` | 0.100, 0.300  | 0.400, 0.650  |
+
+So the three families that our own engines cannot play are carried by the engine subsystem, and this is the
+first measurement of it winning games rather than passing its own validation. It was invisible until tonight
+only because those games had never been prepped.
+
+`memory/` is in `.gitignore`, so none of these artifacts ship in the image: the tournament rebuilds them in
+prep, which is the design. What ships is the gate fix and the measurement.
+
+Two honest caveats. The numbers above are against `random`, which is a weak opponent - what they prove is
+that the code went from "worse than random" to "much better than random", not that it beats a good bot. And
+`taboo` at 1.000 says more about the test game than about the adapter: it is my own game and the adapter
+solves it. The `split_deal` numbers (0.400 and 0.650 from 0.100 and 0.300) are the most honest of the three.
