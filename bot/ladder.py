@@ -194,12 +194,17 @@ def decide_turn(spec, start_msg, turn_msg, deadline, progress=None, move_seconds
                    if isinstance(row, dict) and row.get("action")]
             engine = None
         else:
-            engine = engines_base.get_engine(family)
+            # An unclassified game keeps its verified simulator: resolve_engine lends it the engine that
+            # fits the simulator's shape instead of dropping the whole L3 level (bot/engines/base.py).
+            engine, engine_family = engines_base.resolve_engine(family, spec)
             wordle_move = family == "guessing" and wordle.is_wordle_rules(spec.rules if spec else "")
             if not wordle_move and (spec is None or not spec.verified or not spec.simulator_path):
                 raise engines_base.NotAvailable("no verified simulator")
             if engine is None:
                 raise engines_base.NotAvailable("no engine for family %s" % family)
+            if engine_family != family:
+                log.info("family %s has no engine of its own: borrowing the %s engine for this %s game" % (
+                    family, engine_family, "simultaneous" if getattr(spec, "simultaneous", False) else "sequential"))
             try:
                 from .chat import influence as _influence
                 engine.want_replies = _influence.wants_replies(spec, start_msg)

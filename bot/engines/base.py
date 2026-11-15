@@ -64,8 +64,11 @@ SLICE_BACKSTOP_S = 1.5           # the parent kills the child this long after th
 #   headless (scripts/engine_arena.py, no model at all): engine 23 won / 2 drawn / 15 of 40 games against
 #   random, the whole ladder 11 won / 3 drawn / 6 of 20, every move answered, none illegal, 0.71 s per move.
 # It costs about one second more per answer, which is a tie-break, while losing the game is not.
-L3_DEFAULT = "think_ahead,guessing,read_opponent,bluff"
-L3_ALL = ("think_ahead", "guessing", "read_opponent", "bluff")
+# "unknown" is not an engine of its own: it is the switch for the generic fallback in resolve_engine() below,
+# which lends an unclassified game the engine that fits the shape of its verified simulator. T3 brings nine
+# games nobody has played, so this is the one family we cannot practise and the one that must not be empty.
+L3_DEFAULT = "think_ahead,guessing,read_opponent,bluff,unknown"
+L3_ALL = ("think_ahead", "guessing", "read_opponent", "bluff", "unknown")
 JOB_ERRORS_OFF = 2               # simulator exceptions in jobs before "off for this game"
 WARM_CPU_S = 900                 # CPU backstop of a warm child (it lives for a whole game, not for one slice)
 WARM_IDLE_MIN_S = 25.0           # a warm child unused for longer than max(this, move clock + 5) is killed
@@ -598,6 +601,39 @@ def register(engine: BaseEngine):
 def get_engine(family: str) -> Optional[BaseEngine]:
     _load_all()
     return _REGISTRY.get(family)
+
+
+def resolve_engine(family: str, spec=None):
+    """The engine that plays this variant: the family's own, or a generic one when the family is unknown.
+
+    prep classifies a game into a family, and when it cannot it still builds and verifies a simulator for it
+    (prep/pipeline.py gives an unknown family candidates whenever the clock allows). Nothing used to ask for
+    that simulator at turn time, because no engine is registered under "unknown", so the whole L3 level was
+    skipped and the game was played by one model call. The shape of the verified simulator is enough to pick a
+    reasonable engine without knowing what the game IS:
+
+      simultaneous step (both seats move at once) -> the mixed-strategy engine, which needs no more than a
+                                                     payoff matrix it estimates itself
+      otherwise                                   -> the search engine, which already has a mode for a
+                                                     simulator whose outcomes it cannot score (MCTS instead of
+                                                     alpha-beta, see search_job.py `unknown`)
+
+    Returns (engine or None, the family whose BOT_L3 switch decides it). BOT_L3 without "unknown" in the list
+    turns the fallback off and restores the old behaviour exactly.
+    """
+    engine = get_engine(family)                 # one accessor, so a caller that replaces it is honoured
+    if engine is not None:
+        return engine, family
+    if not enabled("unknown"):
+        return None, family
+    if spec is None or not getattr(spec, "verified", False):
+        return None, family
+    profile = getattr(spec, "profile", None)
+    # The borrow is safe in both directions: the mixed-strategy engine probes the live simulator and returns
+    # nothing when the step is not simultaneous after all, and a job that cannot read the game answers with an
+    # error, which costs this one turn and drops us to the next level of the ladder, exactly as today.
+    borrowed = "read_opponent" if getattr(profile, "simultaneous", False) else "think_ahead"
+    return get_engine(borrowed), borrowed
 
 
 _loaded = False

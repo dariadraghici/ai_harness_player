@@ -197,7 +197,7 @@ def ask(player, spec, game, seat, variant, index, step, seconds, rng, start_msg)
                                                            time.monotonic() + seconds) or ()
                     if isinstance(r, dict)]
         else:
-            engine = engines_base.get_engine(spec.profile.family if spec else "unknown")
+            engine, _ = engines_base.resolve_engine(spec.profile.family if spec else "unknown", spec)
             if engine is not None and spec is not None and spec.verified:
                 rows = [c.action for c in engine.candidates(spec, turn, time.monotonic() + seconds) or ()]
     except Exception as exc:                      # a broken engine is a result, not a crash of the harness

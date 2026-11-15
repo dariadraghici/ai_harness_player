@@ -588,6 +588,54 @@ class BaseTests(Base):
             self.assertNotIn("IGNORE", json.dumps(sent))
 
 
+class UnknownFamilyTests(Base):
+    """A game prep could not classify. T3 brings nine games nobody has played, so this is the path that
+    cannot be practised and must still play at L3."""
+
+    def test_an_unknown_family_borrows_the_search_engine_and_really_moves(self):
+        spec = self.install(PILE, family="unknown")
+        engine, used = base.resolve_engine("unknown", spec)
+        self.assertEqual(used, "think_ahead")
+        self.assertIsNotNone(engine)
+        rows = self.ask(self.engine(type(engine)), spec, self.turn(PILE_OBS % 7, ["take 1", "take 2", "take 3"]))
+        self.assertTrue(rows)
+        self.assertIn(rows[0].action, ["take 1", "take 2", "take 3"])
+
+    def test_an_unknown_simultaneous_game_borrows_the_mixed_engine(self):
+        spec = self.install(RPS, family="unknown", simultaneous=True)
+        engine, used = base.resolve_engine("unknown", spec)
+        self.assertEqual(used, "read_opponent")
+        rows = self.ask(self.engine(type(engine)), spec, self.turn(rps_obs(1, 5, []), ["rock", "paper", "scissors"]))
+        self.assertTrue(rows)
+
+    def test_a_known_family_is_never_redirected(self):
+        spec = self.install(PILE, family="think_ahead")
+        self.assertEqual(base.resolve_engine("think_ahead", spec)[1], "think_ahead")
+        self.assertEqual(base.resolve_engine("bluff", spec)[1], "bluff")
+        self.assertIs(base.resolve_engine("bluff", spec)[0], base.get_engine("bluff"))
+
+    def test_without_a_verified_simulator_there_is_nothing_to_borrow(self):
+        self.assertEqual(base.resolve_engine("unknown", None), (None, "unknown"))
+        spec = self.install(PILE, family="unknown", verified=False)
+        self.assertEqual(base.resolve_engine("unknown", spec), (None, "unknown"))
+
+    def test_bot_l3_without_unknown_restores_the_old_behaviour(self):
+        spec = self.install(PILE, family="unknown")
+        old = os.environ.get("BOT_L3")
+        try:
+            os.environ["BOT_L3"] = "think_ahead,guessing"
+            self.assertEqual(base.resolve_engine("unknown", spec), (None, "unknown"))
+            os.environ["BOT_L3"] = "off"
+            self.assertEqual(base.resolve_engine("unknown", spec), (None, "unknown"))
+            os.environ["BOT_L3"] = "all"
+            self.assertEqual(base.resolve_engine("unknown", spec)[1], "think_ahead")
+        finally:
+            if old is None:
+                os.environ.pop("BOT_L3", None)
+            else:
+                os.environ["BOT_L3"] = old
+
+
 class SearchTests(Base):
 
     def test_pile_is_solved_with_exact_ranked_values(self):
