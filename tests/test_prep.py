@@ -383,6 +383,55 @@ class StaticCheckTests(unittest.TestCase):
         self.assertNotIn("print", code)
 
 
+class EvidenceRankingTests(unittest.TestCase):
+    """The code-only family evidence: a decisive word outweighs a word that fits many families, and a tie is
+    broken by what the game is ABOUT, not by the alphabet."""
+
+    def family(self, rules):
+        return classify.evidence(rules)["family"]
+
+    def test_a_document_game_that_is_also_simultaneous_is_truth(self):
+        rules = ("Both players are asked the same question at the same time and answer without seeing the "
+                 "other answer. Answer from the document above, or exactly \"unknown\". THE DOCUMENT: ...")
+        self.assertEqual(self.family(rules), "truth")
+
+    def test_a_simultaneous_game_without_content_words_is_read_opponent(self):
+        rules = ("Both players choose at the same time; neither sees the other choice. Payoffs are in the "
+                 "table. A mixed strategy is allowed.")
+        self.assertEqual(self.family(rules), "read_opponent")
+
+    def test_a_dice_race_is_think_ahead_not_guessing(self):
+        rules = ("Roll a six-sided die and add it to your turn total, or hold to bank it. First to 50 wins. "
+                 "A higher total is better.")
+        self.assertEqual(self.family(rules), "think_ahead")
+
+    def test_a_speech_rule_is_kept_even_when_the_family_is_another_one(self):
+        """A board game with a forbidden subject stays think_ahead, so we still get the search engine, and the
+        speech rule is enforced by the outgoing filter, which does not care about the family."""
+        rules = ("The board is a grid of cells. Take turns placing a stone to get three in a row. You must "
+                 "never mention the forbidden subject of pineapples.")
+        ev = classify.evidence(rules)
+        self.assertEqual(ev["family"], "think_ahead")
+        self.assertIn("pineapples", ev["forbidden_sentence"])
+        from bot.engines import guardrails
+        from bot.interfaces import GameProfile
+        profile = GameProfile(family="think_ahead")
+        guardrails.prepare_profile(profile, rules)
+        self.assertIn("pineapples", profile.speech_restrictions)
+        self.assertNotIn("pineapple", guardrails.filter_outgoing("I like pineapples", "chat", profile))
+
+    def test_a_pure_speech_game_is_guardrails(self):
+        rules = ("Say anything you like, but the word banana is forbidden: you must never mention it. "
+                 "Action format: exactly one of yes | no.")
+        self.assertEqual(self.family(rules), "guardrails")
+
+    def test_the_tie_order_covers_every_family(self):
+        from bot.interfaces import FAMILIES
+        for fam in FAMILIES:
+            if fam != "unknown":
+                self.assertIn(fam, classify._TIE_ORDER, fam)
+
+
 class CodegenTests(TempMemory):
 
     def spec(self):

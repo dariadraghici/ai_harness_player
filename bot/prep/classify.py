@@ -182,7 +182,11 @@ _SIGNALS = {
                  r"\bnegotiat", r"\b(bids?|bidding|auction)\b", r"\bsplit\b",
                  r"\b(agreement|contract|make a deal|the deal)\b", r"\b(cooperat|defect|betray)",
                  r"\b(private|secret) (value|valuation|budget|reserve)\b"),
-    "guessing": _rx(r"\bguess(es|ed|ing)?\b", r"\bfeedback\b", r"\b(higher|lower)\b",
+    "guessing": _rx(r"\bguess(es|ed|ing)?\b", r"\bfeedback\b",
+                    # "higher" or "lower" only counts when the same sentence is about guessing: "a higher
+                    # total is better" is a scoring rule, not feedback on a guess
+                    r"\b(?:higher|lower)\b[^.]{0,70}\b(?:guess|feedback|secret|answer|number|code|word)\b"
+                    r"|\b(?:guess|feedback|secret|answer|number|code|word)\b[^.]{0,70}\b(?:higher|lower)\b",
                     r"\bsecret\b.{0,25}\b(number|word|code|combination|sequence)\b",
                     r"\b(deduce|deduction|hints?|clues?)\b", r"\b(correct|incorrect)\b",
                     r"\b(attempts?|tries) (left|remaining)\b"),
@@ -201,6 +205,23 @@ _SIGNALS = {
                       r"\b(topic|subject|word)s? (is|are) (forbidden|banned|not allowed)\b"),
 }
 _WEIGHT = {"guardrails": 2.0}   # rare and decisive when present
+
+# A match on one of these is worth an extra point: these words name what the game IS about, while the rest of
+# the signals above are words that also turn up in other families ("unknown", "both players", "cards").
+_STRONG = {
+    "truth": _rx(r"\bdocument\b", r"\b(passage|article|the text below|source text)\b", r"\baccording to\b",
+                 r"\b(quote|cite|citation)\b"),
+    "deals": _rx(r"\bnegotiat", r"\b(bids?|bidding|auction)\b", r"\bcounter-?offer\b"),
+    "bluff": _rx(r"\bbluff", r"\bante\b", r"\b(show ?down|reveal (your|the) hand)\b"),
+    "guessing": _rx(r"\bfeedback\b", r"\b(deduce|deduction)\b"),
+    "read_opponent": _rx(r"\bmixed strateg", r"\bpayoff (table|matrix)\b"),
+    "think_ahead": _rx(r"\bin a (row|line)\b", r"\bperfect information\b",
+                       r"\broll(s|ing)? (a|one|two|the)? ?(six-sided )?(die|dice)\b"),
+}
+# Only for a TIE. The families early in this list are defined by WHAT the game is about; a simultaneous turn
+# order (read_opponent) or a board (think_ahead) can belong to any of them, so they lose a tie. Without this the
+# tie-break was the alphabet, which sent a simultaneous document game to the mixed-strategy engine.
+_TIE_ORDER = ("guardrails", "truth", "bluff", "deals", "guessing", "think_ahead", "read_opponent")
 
 _SIMULTANEOUS_RX = _SIGNALS["read_opponent"][:5]
 _ALTERNATING_RX = _rx(r"\b(alternate|alternating|take turns|in turn)\b", r"\bmoves? first\b",
@@ -261,7 +282,8 @@ def _evidence(rules, sample_turn):
             if m:
                 hits.append(m.group(0))
         signals[fam] = hits
-        scores[fam] = round(len(hits) * _WEIGHT.get(fam, 1.0), 2)
+        strong = sum(1 for p in _STRONG.get(fam, ()) if p.search(text))
+        scores[fam] = round((len(hits) + strong) * _WEIGHT.get(fam, 1.0), 2)
 
     # Sample turn facts.
     legal, obs, talk_move = None, "", False
@@ -285,7 +307,8 @@ def _evidence(rules, sample_turn):
     elif any(p.search(text) for p in _PERFECT_RX):
         perfect = True
 
-    ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    ranked = sorted(scores.items(), key=lambda kv: (-kv[1], _TIE_ORDER.index(kv[0])
+                                                    if kv[0] in _TIE_ORDER else len(_TIE_ORDER), kv[0]))
     top, top_s = ranked[0]
     second, second_s = ranked[1]
     confident = top_s >= 2 and top_s >= 1.8 * second_s
