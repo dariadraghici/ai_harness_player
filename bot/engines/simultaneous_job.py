@@ -22,7 +22,8 @@ For the current simultaneous step (current_player(state) == -1; contract C5: app
      the next one clearly better than the plain frequencies, that transition is mixed in.
   4. CAPPED EXPLOITATION. The best response BR to the model gets the weight
      w = W_MAX * n / (n + W_HALF) (only when it gains something): final = (1 - w) * x + w * onehot(BR).
-     w never exceeds W_MAX, so an opponent that fakes a pattern cannot make us predictable.
+     w never exceeds W_MAX, so there is always equilibrium mass left and we are never fully predictable.
+     The caller may override both numbers (payload exploit_max / exploit_half); see the constants.
 
 payload: observation, legal_actions, variant, seat, budget_s, unknown, prior_counts {action: weight}.
 Result: {"ok": True, "live": True, "algo": "equilibrium", "actions": [{"action", "p_eq", "p_final",
@@ -37,8 +38,19 @@ import random
 import types
 import zlib
 
-W_MAX = 0.5                # the largest weight exploitation can ever get
-W_HALF = 8.0               # observations at which exploitation has half of W_MAX
+# MEASURED, not argued, with scripts/engine_arena.py on rps_twist "9 rounds" (--no-policies, because
+# bot/policies/rps.py claims that game at 0.98 and would otherwise answer every turn itself). Score counts a
+# draw as a half, two seeds, 24-40 games each:
+#   opponent `biased` (a fixed 60 percent bias, the exploitable case)   0.5/8 -> 0.354, 0.537
+#                                                                      0.9/4 -> 0.729, 0.800
+#   opponent `shifty` (the same bias, moved every 3 turns: the case     0.5/8 -> 0.583, 0.633
+#   that punishes leaning on a stale pattern)                          0.9/4 -> 0.550, 0.600
+# So the old cap gave away about a quarter of the score against a stable pattern to save about 0.04 against a
+# moving one, which is inside the noise of 30 games. Hence 0.9/4. The weights stay overridable per payload
+# (BOT_EXPLOIT_MAX / BOT_EXPLOIT_HALF reach them through bot/engines/simultaneous.py) so the next measurement
+# needs no code change.
+W_MAX = 0.9                # the largest weight exploitation can ever get
+W_HALF = 4.0               # observations at which exploitation has half of W_MAX
 MIN_GAIN = 0.1             # the best response must beat the equilibrium against the model by this share of the
                            # matrix spread (max - min): a round of a long game is worth little in absolute terms
 DECAY = 0.9                # per round, for the opponent's older actions
@@ -275,7 +287,11 @@ def run(sim, payload):
         gain = ev_model[br] - sum(x[i] * ev_model[i] for i in range(n))
         spread = max(max(r) for r in A) - min(min(r) for r in A)
         if spread > 1e-9 and gain > MIN_GAIN * spread:
-            w = W_MAX * n_obs / (n_obs + W_HALF)
+            # how far we may lean on the opponent model: tunable so the right value can be MEASURED
+            # (scripts/engine_arena.py) instead of argued about. The defaults are the old constants.
+            w_max = max(0.0, min(1.0, float(payload.get("exploit_max") or W_MAX)))
+            w_half = max(0.5, float(payload.get("exploit_half") or W_HALF))
+            w = w_max * n_obs / (n_obs + w_half)
     final = list(x)
     if w > 0:
         final = [(1.0 - w) * x[i] + (w if i == br else 0.0) for i in range(n)]

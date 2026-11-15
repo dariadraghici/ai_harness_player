@@ -58,6 +58,57 @@ class EngineArenaTests(unittest.TestCase):
         self.assertIn("none in /memory", EA.report(out))
         self.assertGreater(out["no_answer"][0], 0)        # the engine had nothing, the game went on anyway
 
+    def test_biased_and_shifty_are_legal_skewed_opponents(self):
+        """The two opponents that make an opponent model measurable: `random` cannot be exploited and `first`
+        is exploited in one observation, so neither can tell a model apart from equilibrium play."""
+        for who in ("biased", "shifty"):
+            out = EA.run("taboo", "", (who, "random"), 6, 2.0, seed=4)
+            self.assertEqual(out["games"], 6, who)
+            self.assertEqual(out["illegal"], [0, 0], who)
+            self.assertEqual(out["no_answer"], [0, 0], who)
+
+    def test_biased_leans_on_one_action_and_shifty_moves_that_lean(self):
+        import random as _random
+
+        class G(object):
+            def legal_actions(self, seat):
+                return ["a", "b", "c"]
+
+            def random_action(self, seat, rng):
+                return "a"
+
+        rng, game = _random.Random(7), G()
+        picks = [EA.ask("biased", None, game, 0, {}, 0, step, 1.0, rng, {})[0] for step in range(1, 121)]
+        self.assertGreater(picks.count("a"), 60)                 # BIAS_P of the mass, and never only "a"
+        self.assertTrue(set(picks) == {"a", "b", "c"})
+        # `shifty` holds a bias for SHIFT_EVERY turns and then moves it on, so leaning on the past is punished.
+        early = [EA.ask("shifty", None, game, 0, {}, 0, step, 1.0, rng, {})[0] for step in range(1, 4)]
+        later = [EA.ask("shifty", None, game, 0, {}, 0, step, 1.0, rng, {})[0] for step in range(4, 7)]
+        self.assertNotEqual(EA.SHIFT_EVERY, 0)
+        self.assertTrue(early.count("a") >= 2 or later.count("b") >= 2)
+
+    def test_no_policies_takes_the_dedicated_policy_out_of_the_way(self):
+        """A policy that claims a game answers before the family engine is ever asked, here and in the ladder,
+        which makes the engine unmeasurable on that game. The switch must be reversible: bot.policies is a
+        module shared by the whole process."""
+        from bot import policies
+        real_specialized, real_choose = policies.specialized, policies.choose
+        token = EA.disable_policies()
+        try:
+            self.assertFalse(policies.specialized("rock paper scissors, both play at once"))
+            self.assertIs(policies.choose("anything at all"), policies.generic)
+        finally:
+            EA.restore_policies(token)
+        self.assertIs(policies.specialized, real_specialized)
+        self.assertIs(policies.choose, real_choose)
+
+    def test_a_run_with_no_policies_restores_them_afterwards(self):
+        from bot import policies
+        real = policies.specialized
+        out = EA.run("taboo", "", ("random", "first"), 2, 2.0, seed=2, no_policies=True)
+        self.assertEqual(out["games"], 2)
+        self.assertIs(policies.specialized, real)
+
     def test_the_result_is_reproducible_for_a_seed(self):
         first = EA.run("taboo", "", ("random", "first"), 5, 2.0, seed=11)
         again = EA.run("taboo", "", ("random", "first"), 5, 2.0, seed=11)

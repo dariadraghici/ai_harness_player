@@ -34,6 +34,16 @@ PRIOR_KEEP = 0.5             # weight of older games when a game ends
 JOB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "simultaneous_job.py")
 
 
+def _env_float(name):
+    """A BOT_* override for the exploitation weights, or None to use the job's own default."""
+    import os
+    raw = os.environ.get(name, "").strip()
+    try:
+        return float(raw) if raw else None
+    except ValueError:
+        return None
+
+
 class SimultaneousEngine(base.MixedEngine):
     family = "read_opponent"
     job_file = JOB_FILE
@@ -61,7 +71,8 @@ class SimultaneousEngine(base.MixedEngine):
         self._prior.clear()
 
     def payload(self, spec, turn_msg, game):
-        return {"prior_counts": self._prior.get((spec.game_id, spec.rules_hash), {})}
+        return {"prior_counts": self._prior.get((spec.game_id, spec.rules_hash), {}),
+                "exploit_max": _env_float("BOT_EXPLOIT_MAX"), "exploit_half": _env_float("BOT_EXPLOIT_HALF")}
 
     def build(self, res, spec, turn_msg, game):
         rows = res.get("actions") or []

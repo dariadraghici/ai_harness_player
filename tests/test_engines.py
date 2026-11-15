@@ -381,7 +381,16 @@ def guess_obs(low, high, hist):
 
 
 def simultaneous_job_w_max():
-    return 0.5
+    """The job's own cap, read from the job file: the number is MEASURED and may be retuned, and a test that
+    hardcodes it tests the copy in the test instead of the engine."""
+    ns = {}
+    with open(simultaneous.JOB_FILE) as fh:
+        for line in fh:
+            if line.startswith(("W_MAX", "W_HALF")):
+                exec(line.split("#")[0], ns)
+            if "W_MAX" in ns and "W_HALF" in ns:
+                break
+    return float(ns["W_MAX"])
 
 
 def sha(code):
@@ -879,16 +888,47 @@ class SimultaneousTests(Base):
         self.assertGreater(paper[2] - paper[0], 0.08)                    # clearly visible after 6 rounds
         for n, p, w, br in final:
             self.assertLessEqual(w, simultaneous_job_w_max() + 1e-9)
-        self.assertLess(paper[-1], 0.5 * 0.5 + 0.5 + 0.03)               # capped: never a pure best response
-        self.assertGreater(min(self.probs(self.job(spec, rps_obs(41, 60, [("scissors", "rock")] * 40)), "p_final").values()), 0.1)
+        w_max = simultaneous_job_w_max()
+        # Capped: never a pure best response, and every action keeps the equilibrium mass the cap leaves.
+        self.assertLess(paper[-1], w_max + (1.0 - w_max) * 0.5 + 0.03)
+        p_late = self.probs(self.job(spec, rps_obs(41, 60, [("scissors", "rock")] * 40)), "p_final")
+        self.assertGreater(min(p_late.values()), 0.0)
+        self.assertLess(max(p_late.values()), 1.0 - 1e-9)
 
     def test_a_faked_pattern_cannot_farm_us(self):
         """They play rock 12 times and then switch: the decayed model follows, and the weight stays capped."""
         spec = self.spec()
         hist = [("scissors", "rock")] * 12 + [("paper", "scissors")] * 4
         res = self.job(spec, rps_obs(17, 60, hist))
-        self.assertLessEqual(res["w"], 0.5)
+        self.assertLessEqual(res["w"], simultaneous_job_w_max() + 1e-9)
         self.assertEqual(res["br"], "rock")                              # now the best response to scissors
+
+    def test_the_exploitation_weights_can_be_overridden_per_payload(self):
+        """The two numbers that decide how hard we lean on the opponent model are MEASURED
+        (scripts/engine_arena.py --no-policies), so they must be settable without editing the job."""
+        spec = self.spec()
+        hist = [("scissors", "rock")] * 6
+        soft = self.job(spec, rps_obs(7, 60, hist), exploit_max=0.1, exploit_half=8.0)
+        hard = self.job(spec, rps_obs(7, 60, hist), exploit_max=1.0, exploit_half=0.5)
+        self.assertLess(soft["w"], hard["w"])
+        self.assertLessEqual(soft["w"], 0.1 + 1e-9)
+        self.assertGreater(hard["w"], 0.8)
+        self.assertLess(self.probs(soft, "p_final")["paper"], self.probs(hard, "p_final")["paper"])
+        # A missing or unusable override leaves the measured default in place.
+        plain = self.job(spec, rps_obs(7, 60, hist))
+        self.assertAlmostEqual(plain["w"], self.job(spec, rps_obs(7, 60, hist), exploit_max=None)["w"])
+
+    def test_the_bot_exploit_env_overrides_reach_the_payload(self):
+        eng = simultaneous.SimultaneousEngine()
+        spec = self.spec()
+        os.environ["BOT_EXPLOIT_MAX"], os.environ["BOT_EXPLOIT_HALF"] = "0.77", "3.5"
+        try:
+            got = eng.payload(spec, {"observation": "", "legal_actions": self.LEGAL}, None)
+        finally:
+            del os.environ["BOT_EXPLOIT_MAX"], os.environ["BOT_EXPLOIT_HALF"]
+        self.assertEqual((got["exploit_max"], got["exploit_half"]), (0.77, 3.5))
+        self.assertIsNone(eng.payload(spec, {"observation": "", "legal_actions": self.LEGAL},
+                                      None)["exploit_max"])
 
     def test_candidates_are_a_mix_inside_the_margin_with_the_drawn_action_first(self):
         spec = self.spec()

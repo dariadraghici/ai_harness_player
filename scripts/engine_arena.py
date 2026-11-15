@@ -16,7 +16,22 @@ Players:
            dedicated policy, the engine or the safe move - our code alone, no tokens
   engine   only the family engine / dedicated policy, nothing else (empty answer = a loss of the turn)
   random   the game's own random_action: the baseline every engine must beat
+  biased   a skewed but non-deterministic opponent: BIAS_P on the first legal action, the rest uniform.
+           `random` is unexploitable by construction (in a symmetric game every action has the same EV
+           against it) and `first` is exploitable in one observation, so neither can tell an opponent
+           model apart from equilibrium play. This player is the case in between, and the only one of the
+           four that measures whether read_opponent actually reads anything.
+  shifty   the adversary that punishes over-exploitation: it holds a bias on one action for SHIFT_EVERY
+           observations, then moves the bias to the next one. An opponent model that leans hard on the past
+           keeps best-responding to a pattern that has already moved, so this is the test of the claim that a
+           high exploitation weight is still safe.
   first    the first legal action: the floor, what the watchdog would send
+
+A dedicated policy (bot/policies/) wins the move before the family engine is ever asked, in `code` and in
+`engine` alike, exactly as bot/ladder.py does it. That hides the engine: rps_twist is claimed by
+bot/policies/rps.py with 0.98, so no amount of tuning bot/engines/simultaneous*.py changes a single move
+there. `--no-policies` takes the registry out of the way, so the family engine can be measured on its own and
+compared with the policy that currently owns the game.
 
 A specialist with a VERIFIED simulator must already be in /memory for the engine to have anything to search
 (run `python scripts/practice.py --game <id> --prep` once). The harness says so instead of pretending.
@@ -44,7 +59,9 @@ for path in (_HERE, REPO, os.path.join(REPO, "testgames")):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-PLAYERS = ("code", "engine", "random", "first")
+PLAYERS = ("code", "engine", "random", "biased", "shifty", "first")
+BIAS_P = 0.6               # how much of `biased`'s mass sits on the first legal action
+SHIFT_EVERY = 3            # turns `shifty` keeps a bias before moving it to the next action
 
 
 def silence_model():
@@ -57,6 +74,25 @@ def silence_model():
     real = llm.complete
     llm.complete = lambda *a, **kw: None
     return real
+
+
+def disable_policies():
+    """Make every game look unspecialized, so the FAMILY ENGINE plays instead of a dedicated policy.
+
+    bot/policies/ is consulted first both here and in bot/ladder.py, and a policy that claims a game short
+    circuits L3 entirely. Without this switch an engine that owns a family on paper can never be measured on
+    the one game we have for it. Returns what was replaced, so a caller that outlives one run can put it back.
+    """
+    from bot import policies
+    real = policies.specialized, policies.choose
+    policies.specialized = lambda *a, **kw: False
+    policies.choose = lambda *a, **kw: policies.generic
+    return real
+
+
+def restore_policies(real):
+    from bot import policies
+    policies.specialized, policies.choose = real
 
 
 def restore_model(real):
@@ -124,6 +160,21 @@ def ask(player, spec, game, seat, variant, index, step, seconds, rng, start_msg)
     t0 = time.monotonic()
     if player == "random":
         return game.random_action(seat, rng), time.monotonic() - t0
+    if player == "shifty":
+        legal = game.legal_actions(seat)
+        if isinstance(legal, list) and legal:
+            favored = legal[(step // max(1, SHIFT_EVERY)) % len(legal)]
+            if len(legal) == 1 or rng.random() < BIAS_P:
+                return favored, time.monotonic() - t0
+            return rng.choice([a for a in legal if a != favored] or list(legal)), time.monotonic() - t0
+        return game.random_action(seat, rng), time.monotonic() - t0
+    if player == "biased":
+        legal = game.legal_actions(seat)
+        if isinstance(legal, list) and legal:
+            if len(legal) == 1 or rng.random() < BIAS_P:
+                return legal[0], time.monotonic() - t0
+            return rng.choice(list(legal[1:])), time.monotonic() - t0
+        return game.random_action(seat, rng), time.monotonic() - t0
     if player == "first":
         legal = game.legal_actions(seat)
         if isinstance(legal, list) and legal:
@@ -185,12 +236,15 @@ def play(game_cls, variant, players, index, seconds, specs, rng, step_cap=400):
     return game.result(), stats
 
 
-def run(game_id, label, players, n, seconds, seed, swap=True):
+def run(game_id, label, players, n, seconds, seed, swap=True, no_policies=False):
     real = silence_model()
+    pol = disable_policies() if no_policies else None
     try:
         return _run(game_id, label, players, n, seconds, seed, swap)
     finally:
         restore_model(real)
+        if pol is not None:
+            restore_policies(pol)
 
 
 def _run(game_id, label, players, n, seconds, seed, swap=True):
@@ -264,6 +318,9 @@ def main(argv=None):
                     help="seconds the engine may really search per move (the arena slice is about 3 s)")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--no-swap", action="store_true", help="do not swap seats between games")
+    ap.add_argument("--no-policies", action="store_true",
+                    help="bypass bot/policies/ so the family engine plays (the only way to measure an engine "
+                         "whose game is claimed by a dedicated policy)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     # The engine takes a FRACTION of the move clock (bot/engines/base.py), so a short test clock would starve
@@ -271,7 +328,8 @@ def main(argv=None):
     fraction = min(0.40, max(0.05, args.slice_s / max(0.5, args.seconds)))
     os.environ["BOT_SLICE_FRACTION"] = "%.4f" % fraction
     out = run(args.game, args.variant, (args.a, args.b), max(1, args.games), args.seconds, args.seed,
-              swap=not args.no_swap)
+              swap=not args.no_swap, no_policies=args.no_policies)
+    out["policies"] = not args.no_policies
     out["slice_s"] = round(fraction * args.seconds, 2)
     print(json.dumps(out, indent=2) if args.json else report(out))
     return 0
