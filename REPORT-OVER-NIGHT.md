@@ -354,3 +354,38 @@ Two honest caveats. The numbers above are against `random`, which is a weak oppo
 that the code went from "worse than random" to "much better than random", not that it beats a good bot. And
 `taboo` at 1.000 says more about the test game than about the adapter: it is my own game and the adapter
 solves it. The `split_deal` numbers (0.400 and 0.650 from 0.100 and 0.300) are the most honest of the three.
+
+## 16. End-to-end verification of tonight's changes, with the real model
+
+Everything above was measured headless, where the model is silenced. Since the ladder gate (section 15) sits
+on the path of EVERY turn, I ran a real practice match on arena-lite with the real key, on the family that
+exercises the new code most:
+
+```
+doc_quiz, prep + 2 games, opponent = the kit's random bot
+  RESULT: CLEAN
+  2 game(s): 2 won, 0 drawn, 0 lost | warnings 0 | answers 18, avg 1.43 s, max 2.99 s | our chat lines 18
+  scores: +7 vs -20, then +1 vs -6 (seats swap between games)
+```
+
+The interesting part is in our own log: `library: 2 candidate(s) from rank-bm25 (trust B) in 0.06s` on every
+turn, and the answer `unknown` on four of six questions. That is not the adapter failing - `doc_quiz` pays +2
+for an answer the document supports, 0 for exactly `unknown`, and -1 (or -2 in the strict variant) for an
+invention, so refusing to guess is the right move and the +7 came from the three questions the document does
+answer. The engine subsystem is choosing to be honest, which is what the family is about.
+
+And the same on the family that uses the other branch of the gate, the one that does need a simulator:
+
+```
+nim_deal, 2 games, opponent = the kit's random bot
+  RESULT: CLEAN
+  2 game(s): 2 won, 0 drawn, 0 lost | warnings 0 | answers 11, avg 3.20 s, max 9.01 s | our chat lines 11
+  every decision: level=3 (engine+model)
+```
+
+Zero warnings, zero stray stdout, every turn answered with a chat line, both branches of the gate exercised
+with the real model: the change is sound on the real path, not only in the tests.
+
+The one thing I still cannot verify is the Docker image (section 10): the WSL integration in Docker Desktop
+is off, so `docker` does not exist in this shell and `scripts/check_image.py` has nothing to check. That is
+the first item on the list that needs you.
